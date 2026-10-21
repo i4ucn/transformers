@@ -1,0 +1,16 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 330 120" width="660" height="240">
+  <title>LiGuo</title>
+  <!-- 图形标：切角方形徽章 + LG 合字（L 的底脚延伸成赛车条纹，托住 G） -->
+  <path d="M 26 4 H 94 L 116 26 V 94 L 94 116 H 26 L 4 94 V 26 Z" fill="#1B2330"/>
+  <path d="M 29 11 H 91 L 109 29 V 91 L 91 109 H 29 L 11 91 V 29 Z" fill="none" stroke="#FFC21A" stroke-width="3"/>
+  <path d="M 26 28 H 40 V 76 H 98 L 92 90 H 26 Z" fill="#FFC21A"/>
+  <path d="M 54 28 H 96 V 37 H 57 V 59 H 87 V 55 H 72 V 47 H 96 V 68 H 48 V 34 Z" fill="#F4F6FA"/>
+  <!-- 文字标：LiGuo，和图形标同一套方块笔画 -->
+  <path transform="translate(140 32)" fill="#1B2330" fill-rule="evenodd"
+        d="M 0 0 H 11 V 45 H 34 L 30 56 H 0 Z
+           M 45 0 H 53 V 8 L 50 11 H 42 V 3 Z
+           M 42 18 H 53 V 56 H 42 Z
+           M 67 0 H 101 V 11 H 72 V 45 H 90 V 33 H 80 V 24 H 101 V 56 H 61 V 6 Z
+           M 109 18 H 120 V 45 H 134 V 18 H 145 V 56 H 115 L 109 50 Z
+           M 159 18 H 189 V 50 L 183 56 H 153 V 24 Z M 164 29 V 45 H 178 V 29 Z"/>
+</svg>

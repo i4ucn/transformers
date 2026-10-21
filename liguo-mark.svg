@@ -1,0 +1,7 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 120 120" width="240" height="240">
+  <title>LiGuo</title>
+  <path d="M 26 4 H 94 L 116 26 V 94 L 94 116 H 26 L 4 94 V 26 Z" fill="#1B2330"/>
+  <path d="M 29 11 H 91 L 109 29 V 91 L 91 109 H 29 L 11 91 V 29 Z" fill="none" stroke="#FFC21A" stroke-width="3"/>
+  <path d="M 26 28 H 40 V 76 H 98 L 92 90 H 26 Z" fill="#FFC21A"/>
+  <path d="M 54 28 H 96 V 37 H 57 V 59 H 87 V 55 H 72 V 47 H 96 V 68 H 48 V 34 Z" fill="#F4F6FA"/>
+</svg>
