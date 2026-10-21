@@ -140,15 +140,29 @@ h1{margin:0;font:400 44px/1 var(--display);letter-spacing:.04em;color:var(--ink)
     </div>
   </nav>
 
-  <div class="fallback" id="fallback" hidden>三维模型没有加载出来。请检查网络（需要从 cdnjs / jsDelivr 加载 three.js），或换一个支持 WebGL 的浏览器再打开。</div>
+  <div class="fallback" id="fallback" role="alert" hidden></div>
 </div>
 
-<script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
-<script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/controls/OrbitControls.js"></script>
+<script src="./vendor/three-r128/three.min.js"></script>
+<script src="./vendor/three-r128/OrbitControls.js"></script>
 <script>
 (function () {
 'use strict';
-if (!window.THREE || !THREE.OrbitControls) { document.getElementById('fallback').hidden = false; return; }
+function showFailure(message, error) {
+  const fallback = document.getElementById('fallback');
+  fallback.textContent = message;
+  fallback.hidden = false;
+  document.querySelectorAll('.dock button, .rail button').forEach(button => { button.disabled = true; });
+  if (error) console.error(message, error);
+}
+if (!window.THREE) {
+  showFailure('三维引擎文件未能加载。请确认 vendor/three-r128/three.min.js 已随页面一起保存或部署，然后刷新页面。');
+  return;
+}
+if (!THREE.OrbitControls) {
+  showFailure('视角控制器文件未能加载。请确认 vendor/three-r128/OrbitControls.js 已随页面一起保存或部署，然后刷新页面。');
+  return;
+}
 
 /* ============================================================
    基础工具
@@ -166,7 +180,10 @@ const canvas = document.getElementById('stage');
 let renderer;
 try {
   renderer = new THREE.WebGLRenderer({ canvas, antialias: true });
-} catch (e) { document.getElementById('fallback').hidden = false; return; }
+} catch (e) {
+  showFailure('浏览器未能启动 WebGL 三维渲染。请开启浏览器的硬件加速并重启，或使用支持 WebGL 的浏览器打开。', e);
+  return;
+}
 renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 2));
 renderer.outputEncoding = THREE.sRGBEncoding;
 renderer.toneMapping = THREE.ACESFilmicToneMapping;
