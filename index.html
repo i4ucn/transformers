@@ -201,7 +201,7 @@ controls.enablePan = false;
 controls.minDistance = 6;
 controls.maxDistance = 30;
 controls.maxPolarAngle = 86 * DEG;
-const VIEW = { dir: new THREE.Vector3(7.0, 3.4, 8.6).normalize(), dist: 12.4, low: 0.85, high: 2.15 };
+const VIEW = { dir: new THREE.Vector3(7.0, 3.4, 8.6).normalize(), dist: 12.4, low: 0.85, high: 2.5 };
 let camY = VIEW.low;
 
 /* 环境光照：用几块"柔光箱"生成反射贴图，让车漆和玻璃有高光 */
@@ -432,12 +432,21 @@ const M = {
   glass:  phy(0x9fd2f0, { metalness: 0, roughness: 0.02, transparent: true, opacity: 0.4,
             clearcoat: 1, clearcoatRoughness: 0.02, envMapIntensity: 2.1 }),
   stripe: phy(0x121419, { metalness: 0.55, roughness: 0.2, clearcoat: 1, clearcoatRoughness: 0.06, envMapIntensity: 1.2 }),
+  rearEye: phy(0x101218, { metalness: 0.15, roughness: 0.3, clearcoat: 1, clearcoatRoughness: 0.12 }),
   light:  phy(0xfff6e4, { metalness: 0, roughness: 0.07, clearcoat: 1, clearcoatRoughness: 0.03,
             emissive: 0xffdca8, emissiveIntensity: 0.85, envMapIntensity: 1.5 }),
   tail:   phy(0x5c0b06, { metalness: 0, roughness: 0.1, clearcoat: 1, clearcoatRoughness: 0.05,
             emissive: 0xff2a16, emissiveIntensity: 1.7, envMapIntensity: 1.2 }),
   visor:  phy(0x0a2927, { metalness: 0, roughness: 0.06, clearcoat: 1, clearcoatRoughness: 0.04,
             emissive: 0x2af0dc, emissiveIntensity: 2.4 }),
+  optic:  phy(0x0c6981, { metalness: 0.15, roughness: 0.15, clearcoat: 1,
+            emissive: 0x43dfff, emissiveIntensity: 1.25 }),
+  eyeLens: phy(0x0648c8, { metalness: 0.1, roughness: 0.08, clearcoat: 1,
+            emissive: 0x137aff, emissiveIntensity: 1.5 }),
+  eyeCore: phy(0xa6eaff, { metalness: 0, roughness: 0.1,
+            emissive: 0x77dfff, emissiveIntensity: 2.1 }),
+  faceMetal: phy(0x8895a5, { metalness: 0.9, roughness: 0.32, roughnessMap: TEX.brush,
+            normalMap: TEX.brushN, normalScale: V2(0.06), envMapIntensity: 1.15 }),
 };
 
 /* ============================================================
@@ -514,6 +523,22 @@ function glow(rec, mat, size, pos) {
   return s;
 }
 
+// 贴在车尾表面的红晕，圆心泛红、边缘渐隐；普通透明混合保留红色。
+const blushTex = canvasTexture(128, 128, g => {
+  const grd = g.createRadialGradient(64, 64, 0, 64, 64, 64);
+  grd.addColorStop(0, 'rgba(255,255,255,.90)');
+  grd.addColorStop(0.30, 'rgba(255,255,255,.78)');
+  grd.addColorStop(0.60, 'rgba(255,255,255,.40)');
+  grd.addColorStop(0.82, 'rgba(255,255,255,.12)');
+  grd.addColorStop(1, 'rgba(255,255,255,0)');
+  g.fillStyle = grd; g.fillRect(0, 0, 128, 128);
+});
+M.rearBlush = new THREE.MeshBasicMaterial({
+  map: blushTex, color: new THREE.Color(0xff3547).convertSRGBToLinear(),
+  transparent: true, depthWrite: false, toneMapped: false,
+  polygonOffset: true, polygonOffsetFactor: -1, polygonOffsetUnits: -1,
+});
+
 /* ============================================================
    模型层级
    modelRoot(转身 + 落地) → centerG(把机器人挪回中心) → pitchG(绕后轴立起) → bodyRoot(车身坐标)
@@ -586,6 +611,35 @@ function put(rec, geo, material, pos, rot) {
   m.userData.part = rec.name;
   rec.inner.add(m); rec.meshes.push(m);
   return m;
+}
+// 只展开指定装甲网格，不缩放整棵骨架，轮胎、头和关节保持原有比例。
+const robotForms = [];
+function robotShape(mesh, deform, start = 0.54, end = 0.72) {
+  mesh.updateMatrix();
+  const inverse = mesh.matrix.clone().invert();
+  const source = mesh.geometry.attributes.position.array.slice();
+  const target = source.slice();
+  const v = new THREE.Vector3();
+  for (let i = 0; i < source.length; i += 3) {
+    v.fromArray(source, i).applyMatrix4(mesh.matrix);
+    deform(v);
+    v.applyMatrix4(inverse).toArray(target, i);
+  }
+  robotForms.push({ mesh, source, target, start, end, weight: -1 });
+  return mesh;
+}
+function applyRobotForms(T) {
+  for (const form of robotForms) {
+    const weight = easeIO(clamp01((T - form.start) / (form.end - form.start)));
+    if (weight === form.weight) continue;
+    const geo = form.mesh.geometry, positions = geo.attributes.position;
+    for (let i = 0; i < form.source.length; i++) positions.array[i] = lerp(form.source[i], form.target[i], weight);
+    positions.needsUpdate = true;
+    geo.computeVertexNormals();
+    geo.computeBoundingBox();
+    geo.computeBoundingSphere();
+    form.weight = weight;
+  }
 }
 /* --- 倒角方块 ------------------------------------------------------------
    锐利的 90° 直角永远接不到光，这是"塑料感"最大的来源之一。沿每条棱切掉一条
@@ -706,8 +760,8 @@ const STEPS = [
   { name: '车门展开', short: '鸥翼门掀起', a: 0.00, b: 0.14, desc: '两扇鸥翼门向上掀起，露出藏在侧舱里的手臂。' },
   { name: '车头折叠', short: '立起·车头翻成背包', a: 0.14, b: 0.42, desc: '车身以后轮为支点立起并转身，车头连同前轮向后翻折 180°，变成背包和背部涡轮。' },
   { name: '双臂伸出', short: '车门让路·手臂滑出', a: 0.42, b: 0.64, desc: '车门先举过肩膀收到背后让出空间，手臂再从侧舱横移出来，小臂从上臂里伸出。' },
-  { name: '双腿展开', short: '后备箱分腿·脚翻下', a: 0.64, b: 0.82, desc: '后备箱沿中缝分成两条大腿，小腿从大腿里伸出，后保险杠翻 90° 变成双脚。' },
-  { name: '头部升起', short: '舱盖打开·徽章转正', a: 0.82, b: 1.00, desc: '胸口舱盖向两侧打开，头部升起，背后的车门张开成背翼，胸前的 LiGuo 徽章转半圈摆正。' },
+  { name: '双腿展开', short: '长腿伸展·脚翻下', a: 0.64, b: 0.82, desc: '后备箱沿中缝分成两条大腿，腿部装甲与内骨伸展拉长，后保险杠翻 90° 变成双脚。' },
+  { name: '头部升起', short: '头盔升起·感应鳍展开', a: 0.82, b: 1.00, desc: '胸口舱盖向两侧打开，机甲头盔升起、两侧感应鳍展开，车门张开成背翼，胸前的 LiGuo 徽章转半圈摆正。' },
 ];
 const BOUNDS = [0, 0.14, 0.42, 0.64, 0.82, 1];
 
@@ -740,9 +794,27 @@ span(chest, -0.58, 0.58, 1.45, 1.49, -0.42, 0.26, M.paint);           // 车顶 
 for (const s of [1, -1]) box(chest, 0.12, 0.012, 0.68, M.stripe, [s * 0.12, 1.496, -0.08]);
 box(chest, 1.24, 0.64, 0.02, M.glass, [0, 1.208, 0.509], [-41.1, 0, 0]); // 前挡风玻璃 → 上胸
 box(chest, 1.18, 0.54, 0.02, M.glass, [0, 1.205, -0.581], [26.6, 0, 0]); // 后窗 → 下腹
+for (const mesh of chest.meshes) robotShape(mesh, v => {
+  const height = clamp01((v.z + 0.74) / 1.48);
+  v.x *= lerp(0.68, 1.28, height);
+});
+
+// 胸甲藏在驾驶舱内，车门让路后翻到胸前，形成两块厚实的斜面护甲。
+for (const s of [1, -1]) {
+  const plate = part('pectoral' + s, 'chest', [
+    [0, { p: [s * 0.22, 0.78, 0.10], r: [0, 0, s * 90] }], [0.55, {}],
+    [0.64, { p: [s * 0.48, 1.52, 0.16], r: [0, 0, 0] }],
+  ], { ex: [s, 0.4, 0.2], dist: 0.25 });
+  put(plate, shaped((sx, sy, sz) => [
+    sx * (sz > 0 ? 0.43 : 0.32),
+    sy > 0 ? (sz > 0 ? 0.15 : 0.09) : -0.035,
+    sz > 0 ? 0.30 : -0.23,
+  ]), M.paint);
+  box(plate, 0.54, 0.022, 0.035, M.trim, [0, 0.145, 0.22]);
+}
 
 /* —— 车顶 LiGuo 徽章 → 胸章：最后原地转半圈，两种形态里都是正的 —— */
-const emblem = part('emblem', 'chest', [[0, { p: [0, 1.49, -0.08], r: [0, 0, 0] }], [0.88, {}], [0.96, { r: [0, 180, 0] }]],
+const emblem = part('emblem', 'chest', [[0, { p: [0, 1.49, -0.08], r: [0, 0, 0] }], [0.55, {}], [0.64, { p: [0, 1.63, 0.05] }], [0.88, {}], [0.96, { r: [0, 180, 0] }]],
   { label: ['车顶徽章', '胸章'], ex: [0, 1, 0], dist: 0.3, anchor: [0, 0.05, 0] });
 cyl(emblem, 0.20, 0.03, M.rim, [0, 0.015, 0], null, 40);
 put(emblem, new THREE.CircleGeometry(0.175, 48), M.badge, [0, 0.0315, 0], [-90, 0, 0]);
@@ -757,17 +829,74 @@ for (const s of [1, -1]) {
 const head = part('head', 'chest',
   [[0, { p: [0, 0.695, 0.05] }], [0.85, {}], [0.92, { p: [0, 0.695, 1.13] }], [0.96, { p: [0, 0.84, 1.13] }]],
   { label: ['暗格', '头部'], anchor: [0, 0.1, 0.5] });
-box(head, 0.60, 0.52, 0.54, M.paint, [0, 0, 0]);
-box(head, 0.48, 0.03, 0.30, M.mech, [0, 0.265, -0.05]);              // 面罩
-for (const s of [1, -1]) {
-  box(head, 0.15, 0.02, 0.09, M.visor, [s * 0.12, 0.285, 0.0]);       // 眼睛
-  glow(head, GLOW.visor, 0.20, [s * 0.12, 0.288, 0.01]);
-  box(head, 0.06, 0.07, 0.16, M.mech, [s * 0.22, -0.08, 0.35]);       // 小犄角
-  box(head, 0.04, 0.24, 0.24, M.mech, [s * 0.31, -0.02, -0.02]);      // 耳罩
+// 轮廓用 X/Z 描述，向局部 -Y 挤出；+Y 是脸前方，+Z 是头顶。
+function headPlate(rec, outline, material, front, depth = 0.035, bevel = 0.006) {
+  const shape = new THREE.Shape();
+  outline.forEach(([x, z], i) => i ? shape.lineTo(x, z) : shape.moveTo(x, z));
+  shape.closePath();
+  const geo = new THREE.ExtrudeGeometry(shape, {
+    depth, steps: 1, bevelEnabled: bevel > 0,
+    bevelThickness: bevel, bevelSize: bevel, bevelSegments: 1, curveSegments: 1,
+  });
+  geo.rotateX(Math.PI / 2);
+  return put(rec, geo, material, [0, front, 0]);
 }
-box(head, 0.18, 0.02, 0.04, M.rim, [0, 0.285, -0.14]);
-box(head, 0.10, 0.40, 0.08, M.paint, [0, -0.02, 0.31]);              // 头冠
-cyl(head, 0.13, 0.22, M.mech, [0, -0.04, -0.36], [90, 0, 0]);         // 脖子
+// 八角内骨与分层头盔：收尖下颌、削去额角，摆脱方盒轮廓。
+headPlate(head, [[-.25,-.19],[-.16,-.29],[.16,-.29],[.25,-.19],[.285,.16],[.20,.30],[-.20,.30],[-.285,.16]], M.trim, .205, .425, .012);
+headPlate(head, [[-.27,.12],[-.25,.25],[-.16,.34],[.16,.34],[.25,.25],[.27,.12],[.16,.15],[0,.205],[-.16,.15]], M.paint, .245, .36, .008);
+headPlate(head, [[-.045,.18],[-.065,.30],[0,.385],[.065,.30],[.045,.18],[0,.14]], M.trim, .264, .27);
+headPlate(head, [[-.014,.235],[0,.34],[.014,.235],[0,.205]], M.optic, .275, .006, .002);
+const eyeHaloMat = glowMat(0x2689ff, .32);
+for (const s of [1, -1]) {
+  const mirror = points => points.map(([x, z]) => [s * x, z]);
+  // 圆形光学眼：深眼窝、独立镜圈、蓝色透镜与亮芯，保留可辨识的同心层次。
+  const eyeX = s * .14, eyeZ = .052;
+  cyl(head, .104, .045, M.rearEye, [eyeX, .266, eyeZ], null, 40);
+  put(head, new THREE.TorusGeometry(.087, .012, 10, 40), M.faceMetal, [eyeX, .293, eyeZ], [90, 0, 0]);
+  put(head, new THREE.TorusGeometry(.071, .006, 8, 40), M.trim, [eyeX, .303, eyeZ], [90, 0, 0]);
+  const lens = put(head, new THREE.SphereGeometry(1, 32, 20), M.eyeLens, [eyeX, .301, eyeZ]);
+  lens.scale.set(.066, .017, .066);
+  put(head, new THREE.TorusGeometry(.052, .0045, 8, 40), M.optic, [eyeX, .319, eyeZ], [90, 0, 0]);
+  const core = put(head, new THREE.SphereGeometry(1, 24, 16), M.eyeCore, [eyeX, .322, eyeZ]);
+  core.scale.set(.035, .008, .035);
+  for (let k = 0; k < 4; k++) {
+    const angle = Math.PI * (k / 2 + .25);
+    cyl(head, .0055, .006, M.rim, [eyeX + .087 * Math.cos(angle), .307, eyeZ + .087 * Math.sin(angle)], null, 8);
+  }
+  // 眉甲抬高并向外展开，露出完整镜片，表情更接近参考图的灵动圆眼。
+  headPlate(head, mirror([[.032,.159],[.205,.198],[.26,.16],[.236,.14],[.066,.135]]), M.paint, .298, .05, .004);
+  glow(head, eyeHaloMat, .105, [eyeX, .337, eyeZ]);
+  // 颧骨与护颊，下缘向内收，露出中间的银灰面罩。
+  headPlate(head, mirror([[.24,.047],[.285,-.02],[.258,-.19],[.155,-.277],[.145,-.205],[.20,-.08]]), M.paint, .277, .15);
+  headPlate(head, mirror([[.218,-.08],[.245,-.10],[.211,-.19],[.181,-.216]]), M.trim, .287, .012, .003);
+  // 面罩中线凸起，两边后退，形成真正的双斜面。
+  const mask = put(head, shaped((sx, sy, sz) => [
+    (sx > 0 ? .165 : .008) * (sz > 0 ? 1 : .67),
+    sy > 0 ? (sx > 0 ? .278 : .321) : .235,
+    sz > 0 ? -.045 : -.245,
+  ]), M.faceMetal);
+  mask.scale.x = s; // 用网格镜像保留正确的面绕序和外向法线。
+  for (let k = 0; k < 3; k++) {
+    const x = .045 + k * .035;
+    box(head, .012, .009, .065 - k * .008, M.trim, [s * x, .328 - .26 * x, -.14], [0, -s * 12, 0]);
+  }
+  // 同轴耳机、中央转轴和后脑散热槽。
+  cyl(head, .108, .035, M.trim, [s * .292, -.025, .015], [0, 0, 90], 12);
+  cyl(head, .077, .016, M.faceMetal, [s * .316, -.025, .015], [0, 0, 90], 12);
+  cyl(head, .032, .018, M.optic, [s * .324, -.025, .015], [0, 0, 90], 12);
+  for (let k = 0; k < 3; k++) box(head, .075, .028, .018, M.mech, [s * .17, -.232, .05 + k * .055]);
+  // 感应鳍在离开暗格后展开，反向变形时先收起。
+  const fin = part('headFin' + s, 'head', [
+    [0, { p: [s * .245, -.04, .12], r: [0, 0, 0] }], [.92, {}],
+    [.98, { p: [s * .263, -.05, .27], r: [0, s * 8, 0] }],
+  ], { ex: [s, 0, .5], dist: .14 });
+  headPlate(fin, mirror([[-.025,0],[.025,.015],[.022,.19],[-.01,.145]]), M.trim, .025, .055, .003);
+  headPlate(fin, mirror([[-.012,.025],[.012,.035],[.011,.153],[-.007,.125]]), M.paint, .031, .012, .002);
+}
+headPlate(head, [[-.035,.10],[0,.135],[.035,.10],[.022,-.055],[0,-.08],[-.022,-.055]], M.faceMetal, .317, .025, .003);
+headPlate(head, [[-.115,-.245],[0,-.282],[.115,-.245],[.075,-.305],[-.075,-.305]], M.paint, .267, .05);
+cyl(head, .115, .20, M.mech, [0, -.04, -.39], [90, 0, 0], 16);
+for (const z of [-.445, -.39, -.335]) cyl(head, .126, .025, M.trim, [0, -.04, z], [90, 0, 0], 16);
 
 /* —— 引擎盖 + 车鼻 + 前轮：向后翻 180° 成为背包 —— */
 const hood = part('hood', 'chest', [[0, { p: [0, 0.26, 0.74] }], [0.28, {}], [0.42, { r: [180, 0, 0] }]],
@@ -829,25 +958,103 @@ for (const s of [1, -1]) {
 }
 
 /* —— 手臂：横移出侧舱，小臂从上臂里伸出 —— */
+const handRigs = [];
+// 手指围绕自己的指节转动；收车时蜷指滑回小臂，不靠隐藏网格切换形态。
+function updateHands(T, weights = {}) {
+  const deployed = easeIO(clamp01((T - .60) / .06));
+  const expressive = clamp01((T - .94) / .06);
+  for (const hand of handRigs) {
+    const wave = (hand.side > 0 ? weights.wave || 0 : 0) * expressive;
+    const fist = clamp01((weights.flex || 0) + (weights.fight || 0)) * expressive;
+    const curl = lerp(1, clamp01(.24 + fist * .76 - wave * .24), deployed);
+    hand.fingers.forEach((finger, i) => {
+      finger.root.rotation.y = hand.side * (i - 1.5) * .07 * (1 - curl) * deployed;
+      finger.joints.forEach((joint, k) => {
+        joint.rotation.x = lerp([3, 7, 5][k], [74, 88, 67][k], curl) * DEG;
+      });
+    });
+    hand.thumb.root.rotation.y = hand.side * lerp(-35, 52, (1 - curl) * deployed) * DEG;
+    hand.thumb.root.rotation.z = hand.side * lerp(30, -12, (1 - curl) * deployed) * DEG;
+    hand.thumb.joints[0].rotation.x = lerp(18, 72, curl) * DEG;
+    hand.thumb.joints[1].rotation.x = lerp(12, 70, curl) * DEG;
+  }
+}
 for (const s of [1, -1]) {
   const sh = part('shoulder' + s, 'chest', [
     [0, { p: [s * 0.58, 0.62, 0.44], r: [0, 0, 0] }], [0.54, {}],
-    [0.59, { p: [s * 1.02, 0.62, 0.46] }], [0.60, {}],
-    [0.64, { r: [0, -s * 6, 0] }],
+    [0.59, { p: [s * 1.24, 0.72, 0.55] }], [0.60, {}],
+    [0.64, { r: [0, -s * 9, 0] }],
   ], { label: s > 0 ? ['侧舱', '手臂'] : null, anchor: [0, 0, -0.35], ex: [s, 0, 0.15] });
   box(sh, 0.42, 0.40, 0.30, M.paint, [0, 0, 0.02]);
   box(sh, 0.36, 0.40, 0.76, M.mech, [0, 0, -0.37]);
   box(sh, 0.04, 0.34, 0.52, M.paint, [s * 0.20, 0, -0.36]);
+  for (const mesh of sh.meshes) robotShape(mesh, v => {
+    v.x *= lerp(1.14, 1.48, clamp01((v.z + 0.50) / 0.60));
+    v.y *= 1.18;
+    v.z *= 1.12;
+  }, 0.54, 0.64);
+  // 肩轴与正面检修盘保持圆形，不随肩甲的宽厚变化而拉扁。
+  cyl(sh, .105, .25, M.mech, [-s * .245, 0, 0], [0, 0, 90], 20);
+  cyl(sh, .145, .045, M.trim, [0, .235, .015], null, 24);
+  cyl(sh, .108, .052, M.faceMetal, [0, .247, .015], null, 24);
+  cyl(sh, .047, .057, M.trim, [0, .253, .015], null, 6);
   const el = part('elbow' + s, 'shoulder' + s, [
     [0, { p: [0, 0, -0.02], r: [0, 0, 0] }], [0.58, {}],
-    [0.63, { p: [0, 0, -0.84] }],
+    [0.63, { p: [0, 0, -0.94] }],
     [0.64, { r: [8, 0, 0] }],
   ], { ex: [0, 0, -1] });
   cyl(el, 0.15, 0.30, M.mech, [0, 0, 0], [0, 0, 90], 16);
   box(el, 0.28, 0.32, 0.50, M.paint, [0, 0, -0.27]);
   box(el, 0.30, 0.34, 0.05, M.trim, [0, 0, -0.545]);
-  box(el, 0.30, 0.32, 0.22, M.mech, [0, 0, -0.68]);
-  box(el, 0.08, 0.10, 0.12, M.mech, [-s * 0.12, 0.14, -0.62]);
+  for (const mesh of el.meshes) robotShape(mesh, v => { v.x *= 1.18; v.y *= 1.14; v.z *= 1.12; }, 0.58, 0.64);
+  for (const side of [1, -1]) {
+    cyl(el, .137, .028, M.trim, [side * .18, 0, 0], [0, 0, 90], 24);
+    cyl(el, .102, .033, M.faceMetal, [side * .197, 0, 0], [0, 0, 90], 24);
+    cyl(el, .053, .039, M.mech, [side * .211, 0, 0], [0, 0, 90], 6);
+  }
+  box(el, .038, .03, .36, M.faceMetal, [s * .12, .193, -.32]);
+
+  const hand = part('hand' + s, 'elbow' + s, [
+    [0, { p: [0, 0, -.28] }], [.60, {}],
+    [.66, { p: [0, 0, -.66] }],
+  ], { label: s > 0 ? ['收纳机械手', '五指手掌'] : null, anchor: [0, .04, -.15], ex: [0, 0, -1], dist: .2 });
+  // 腕部转轴、分层掌甲以及掌心的机械压板。
+  cyl(hand, .094, .10, M.mech, [0, 0, -.015], [90, 0, 0], 20);
+  cyl(hand, .108, .025, M.trim, [0, 0, -.05], [90, 0, 0], 20);
+  box(hand, .285, .135, .19, M.trim, [0, 0, -.16]);
+  box(hand, .245, .024, .15, M.faceMetal, [0, .079, -.155]);
+  box(hand, .22, .025, .125, M.paint, [0, -.078, -.145]);
+  for (const side of [1, -1]) cyl(hand, .023, .012, M.mech, [side * .087, .097, -.155], null, 6);
+  const fingers = [];
+  const makeDigit = (parent, lengths, width) => {
+    const joints = [];
+    let previous = parent;
+    for (let k = 0; k < lengths.length; k++) {
+      const joint = new THREE.Group();
+      if (k) joint.position.z = -lengths[k - 1];
+      previous.add(joint);
+      const digit = { name: hand.name, inner: joint, meshes: hand.meshes };
+      cyl(digit, width * .48, width + .012, M.trim, [0, 0, 0], [0, 0, 90], 12);
+      cyl(digit, width * .25, width + .016, M.faceMetal, [0, 0, 0], [0, 0, 90], 8);
+      box(digit, width, .043, lengths[k] - .012, M.faceMetal, [0, 0, -lengths[k] * .5]);
+      box(digit, width * .68, .012, lengths[k] * .44, M.trim, [0, -.027, -lengths[k] * .54]);
+      if (k === lengths.length - 1) box(digit, width * .76, .014, lengths[k] * .44, M.tire, [0, .027, -lengths[k] * .65]);
+      joints.push(joint); previous = joint;
+    }
+    return joints;
+  };
+  for (let i = 0; i < 4; i++) {
+    const root = new THREE.Group();
+    root.position.set(s * (i - 1.5) * .072, 0, -.258);
+    hand.inner.add(root);
+    const length = [.175, .215, .205, .17][i];
+    fingers.push({ root, joints: makeDigit(root, [length * .40, length * .35, length * .25], .049) });
+  }
+  const thumbRoot = new THREE.Group();
+  thumbRoot.position.set(-s * .139, 0, -.107);
+  hand.inner.add(thumbRoot);
+  const thumb = { root: thumbRoot, joints: makeDigit(thumbRoot, [.085, .069], .060) };
+  handRigs.push({ side: s, fingers, thumb });
 }
 
 /* —— 腰部（车身侧进气口） —— */
@@ -856,32 +1063,65 @@ box(pelvis, 1.18, 0.50, 0.20, M.mech, [0, -0.02, 0]);
 box(pelvis, 1.60, 0.10, 0.20, M.paint, [0, 0.25, 0]);
 box(pelvis, 0.30, 0.03, 0.14, M.rim, [0, 0.315, 0]);
 box(pelvis, 1.60, 0.06, 0.20, M.trim, [0, -0.26, 0]);
+for (const mesh of pelvis.meshes) robotShape(mesh, v => { v.x *= 0.70; });
 
 /* —— 腿：后备箱分成两半 —— */
 for (const s of [1, -1]) {
   const hip = part('hip' + s, 'pelvis', [
     [0, { p: [s * 0.41, 0, -0.165], r: [0, 0, 0] }], [0.64, {}],
-    [0.69, { p: [s * 0.45, 0, -0.165], r: [0, -s * 3, 0] }], [0.72, {}],
-    [0.80, { r: [3, -s * 3, 0] }],
+    [0.69, { p: [s * 0.43, 0, -0.165], r: [0, -s * 5, 0] }], [0.72, {}],
+    [0.80, { r: [3, -s * 5, 0] }],
   ], { label: s > 0 ? ['后备箱', '大腿'] : null, anchor: [0, 0.3, -0.45] });
   box(hip, 0.78, 0.55, 0.90, M.paint, [0, 0.015, -0.45]);
   cyl(hip, 0.10, 0.62, M.mech, [0, -0.02, 0.03], [0, 0, 90], 16);    // 髋关节轴
   box(hip, 0.12, 0.012, 0.90, M.stripe, [-s * 0.29, 0.296, -0.45]);
-  box(hip, 0.74, 0.035, 0.26, M.trim, [0, 0.44, -0.76]);             // 尾翼（半边）
-  box(hip, 0.05, 0.13, 0.07, M.trim, [-s * 0.18, 0.355, -0.74]);
-  box(hip, 0.03, 0.12, 0.28, M.trim, [s * 0.375, 0.41, -0.76]);
+  // 抬高尾翼，让两枚纵向椭圆支撑在后视图中成为眼睛。
+  box(hip, 0.74, 0.035, 0.26, M.trim, [0, 0.66, -0.76]);
+  const rearEye = put(hip, new THREE.SphereGeometry(1, 32, 24), M.rearEye, [-s * 0.18, 0.47, -0.76]);
+  rearEye.scale.set(0.105, 0.185, 0.075);
+  const eyeGlint = put(hip, new THREE.SphereGeometry(1, 16, 12), M.light, [-s * 0.18 - 0.028, 0.535, -0.825]);
+  eyeGlint.scale.set(0.022, 0.034, 0.009);
+  box(hip, 0.03, 0.12, 0.28, M.trim, [s * 0.375, 0.63, -0.76]);
+  for (const mesh of hip.meshes) robotShape(mesh, v => {
+    v.x *= lerp(1, 0.88, clamp01(-v.z / 0.9));
+    v.z *= 1.30;
+  }, 0.64, 0.80);
+
+  // 髋部轴承从装甲内露出，层叠圆环强化机械连接。
+  const hipHub = part('hipHub' + s, 'hip' + s, [
+    [0, { p: [0, .18, -.10] }], [.64, {}], [.80, { p: [0, .31, -.12] }],
+  ], { dist: .12, ex: [0, 1, 0] });
+  cyl(hipHub, .115, .035, M.trim, [0, 0, 0], null, 24);
+  cyl(hipHub, .082, .040, M.faceMetal, [0, .016, 0], null, 24);
+  cyl(hipHub, .042, .045, M.mech, [0, .026, 0], null, 12);
 
   const wr = part('wheelR' + s, 'hip' + s, [
     [0, { p: [s * 0.52, -0.26, -0.35], r: [0, 0, 0] }], [0.36, {}],
     [0.42, { p: [s * 0.58, -0.34, -0.80], r: [90, 0, 0] }],
+    [0.64, {}], [0.80, { p: [s * 0.35, -0.48, -0.98] }],
   ], { label: s > 0 ? ['后轮', '腿侧轮'] : null, ex: [s, 0, 0] });
   wheel(wr);
 
   const knee = part('knee' + s, 'hip' + s, [
     [0, { p: [0, 0, -0.90], r: [0, 0, 0] }], [0.72, {}],
-    [0.80, { r: [-12, 0, 0] }],
+    [0.80, { p: [0, 0, -1.17], r: [-12, 0, 0] }],
   ], { dist: 0.2 });
   cyl(knee, 0.12, 0.46, M.mech, [0, -0.02, 0.12], [0, 0, 90], 16);
+  cyl(knee, .145, .48, M.trim, [0, -.02, .12], [0, 0, 90], 24);
+  for (const side of [-1, 1]) {
+    cyl(knee, .112, .026, M.faceMetal, [side * .254, -.02, .12], [0, 0, 90], 24);
+    cyl(knee, .067, .030, M.trim, [side * .269, -.02, .12], [0, 0, 90], 20);
+    cyl(knee, .037, .034, M.rim, [side * .283, -.02, .12], [0, 0, 90], 6);
+    for (let k = 0; k < 4; k++) {
+      const a = k * Math.PI / 2;
+      cyl(knee, .012, .018, M.rim, [side * .273, -.02 + Math.cos(a) * .086, .12 + Math.sin(a) * .086], [0, 0, 90], 6);
+    }
+  }
+  const kneeGuard = part('kneeGuard' + s, 'knee' + s, [
+    [0, { p: [0, .12, .09] }], [.72, {}], [.82, { p: [0, .31, -.09] }],
+  ], { dist: .12, ex: [0, 1, 0] });
+  headPlate(kneeGuard, [[-.16,.09],[-.11,.15],[.11,.15],[.16,.09],[.13,-.13],[0,-.18],[-.13,-.13]], M.faceMetal, .04, .065, .012);
+  headPlate(kneeGuard, [[-.10,.07],[.10,.07],[.08,-.09],[0,-.12],[-.08,-.09]], M.paint, .055, .018, .008);
 
   const shin = part('shin' + s, 'knee' + s, [
     [0, { p: [0, 0, 0.80] }], [0.66, {}],
@@ -889,18 +1129,54 @@ for (const s of [1, -1]) {
   ], { label: s > 0 ? ['伸缩内骨', '小腿'] : null, anchor: [0, 0.2, -0.4], ex: [0, 0, -1] });
   box(shin, 0.58, 0.42, 0.74, M.mech, [0, -0.02, -0.37]);
   box(shin, 0.64, 0.06, 0.60, M.paint, [0, 0.23, -0.38]);
+  for (const mesh of shin.meshes) robotShape(mesh, v => { v.z *= 1.42; }, 0.66, 0.80);
 
   const foot = part('foot' + s, 'shin' + s, [
     [0, { p: [0, 0, -0.80], r: [0, 0, 0] }], [0.74, {}],
-    [0.77, { p: [0, 0, -0.98] }],
-    [0.82, { p: [0, 0.02, -0.98], r: [99, 0, 0] }],
+    [0.77, { p: [0, 0, -1.30] }],
+    [0.82, { p: [0, 0.02, -1.30], r: [99, 0, 0] }],
   ], { label: s > 0 ? ['后保险杠', '脚'] : null, ex: [0, 0.3, -1] });
-  box(foot, 0.78, 0.46, 0.36, M.paint, [0, 0, -0.18]);
-  box(foot, 0.46, 0.07, 0.02, M.tail, [-s * 0.06, 0.13, -0.365]);
-  glow(foot, GLOW.tail, 0.34, [-s * 0.06, 0.13, -0.40]);
+  const boot = box(foot, 0.78, 0.46, 0.36, M.paint, [0, 0, -0.18]);
+  // 保险杠展开成有脚尖、脚背和收窄后跟的靴形装甲。
+  robotShape(boot, v => {
+    const heel = clamp01((v.z + .36) / .36);
+    v.x *= lerp(.95, .72, heel);
+    v.y = -.23 + (v.y + .23) / .46 * lerp(.32, .46, heel);
+    v.z = lerp(-.67, .05, heel);
+  }, .76, .82);
+  // 两侧柔和红脸蛋，随保险杠一起变形，侧视时自然收窄。
+  const blush = put(foot, new THREE.PlaneGeometry(0.40, 0.40), M.rearBlush, [-s * 0.04, 0.025, -0.362], [0, 180, 0]);
+  blush.castShadow = false;
+  blush.receiveShadow = false;
   box(foot, 0.72, 0.10, 0.10, M.trim, [0, -0.18, -0.30]);
   cyl(foot, 0.055, 0.06, M.rim, [s * 0.22, -0.15, -0.37], [90, 0, 0], 12);
   box(foot, 0.62, 0.22, 0.24, M.mech, [0, -0.10, 0.12]);
+
+  // 收起时鞋底与脚背藏在保险杠内，展开后围住脚尖并形成落地面。
+  const sole = part('sole' + s, 'foot' + s, [
+    [0, { p: [0, -.13, -.18] }], [.76, {}], [.82, { p: [0, -.265, -.28] }],
+  ], { dist: .10, ex: [0, -1, 0] });
+  box(sole, .72, .08, .32, M.trim, [0, 0, 0]);
+  box(sole, .73, .045, .32, M.faceMetal, [0, .025, 0]);
+  for (let k = 0; k < 5; k++) box(sole, .11, .06, .045, M.mech, [(k - 2) * .14, -.018, -.136]);
+  for (const mesh of sole.meshes) robotShape(mesh, v => { v.x *= 1.10; v.z *= 2.45; }, .76, .82);
+
+  const instep = part('instep' + s, 'foot' + s, [
+    [0, { p: [0, .04, -.15] }], [.76, {}], [.82, { p: [0, .145, -.31] }],
+  ], { dist: .12, ex: [0, 1, 0] });
+  put(instep, shaped((sx, sy, sz) => [sx * (sz < 0 ? .28 : .19), sy > 0 ? .075 : -.025, sz < 0 ? -.19 : .13]), M.paint);
+  put(instep, shaped((sx, sy, sz) => [sx * (sz < 0 ? .10 : .13), sy > 0 ? .088 : .06, sz < 0 ? -.10 : .10]), M.faceMetal);
+  for (let k = 0; k < 3; k++) box(instep, .13, .009, .014, M.trim, [0, .093, -.035 + k * .035]);
+
+  const ankle = part('ankle' + s, 'foot' + s, [
+    [0, { p: [0, -.085, .10] }], [.76, {}], [.82, { p: [0, .235, .015] }],
+  ], { dist: .12, ex: [0, 1, .2] });
+  cyl(ankle, .105, .47, M.trim, [0, 0, 0], [0, 0, 90], 24);
+  for (const side of [-1, 1]) {
+    cyl(ankle, .085, .028, M.faceMetal, [side * .245, 0, 0], [0, 0, 90], 24);
+    cyl(ankle, .044, .032, M.mech, [side * .260, 0, 0], [0, 0, 90], 12);
+    cyl(ankle, .021, .036, M.rim, [side * .273, 0, 0], [0, 0, 90], 6);
+  }
 }
 
 /* 一共多少个会动的部件（关键帧多于一个） */
@@ -956,6 +1232,7 @@ const _p = new THREE.Vector3(), _r = new THREE.Vector3(), _v = new THREE.Vector3
 const bbox = new THREE.Box3();
 
 function applyTimeline(T) {
+  applyRobotForms(T);
   sampleKeys(ROOT.pitch, T, _p, _r); pitchG.rotation.set(_r.x, 0, 0);
   sampleKeys(ROOT.yaw, T, _p, _r); modelRoot.rotation.set(0, _r.y, 0);
   sampleKeys(ROOT.center, T, centerG.position, _r);
@@ -963,6 +1240,7 @@ function applyTimeline(T) {
     sampleKeys(rec.keys, T, rec.g.position, _r);
     rec.g.rotation.set(_r.x, _r.y, _r.z);
   }
+  updateHands(T);
 }
 function addRot(name, dx, dy, dz, w) {
   const r = rig[name] && rig[name].g.rotation;
@@ -1305,7 +1583,8 @@ function step(dt) {
   if (state.T <= 0.001 && state.target === 0 && state.stepMode && !state.pose) state.dir = 1;
 
   // 取景高度跟着形态走：汽车低、机器人高（保留用户自己转的角度和缩放）
-  const camGoal = lerp(VIEW.low, VIEW.high, easeIO(clamp01((state.T - 0.12) / 0.32)));
+  const camGoal = lerp(VIEW.low, VIEW.high - 0.35, easeIO(clamp01((state.T - 0.12) / 0.32)))
+    + 0.35 * easeIO(clamp01((state.T - 0.64) / 0.18));
   const dy = camGoal - camY;
   camY = camGoal;
   controls.target.y += dy;
@@ -1339,6 +1618,7 @@ function step(dt) {
     addRot('shoulder-1', 0, Math.sin(t * 1.7) * 2, 0, idle);
   }
 
+  updateHands(state.T, state.w);
   ground(state.E * 0.55);
   applyExplode(state.E, state.time);
   modelRoot.updateMatrixWorld(true);
