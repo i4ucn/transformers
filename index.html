@@ -951,9 +951,9 @@ for (const s of [1, -1]) {
     const bx = sy > 0 ? 0 : s * 0.20, by = sy > 0 ? 0 : -0.50;
     return [bx + s * 0.9285 * off, by + 0.3714 * off, sy > 0 ? zTop[sz > 0 ? 1 : 0] : zBot[sz > 0 ? 1 : 0]];
   });
-  put(d, winSide([-0.46, 0.04], [-0.58, 0.58], 0.004, 0.018), M.glass);       // 车窗玻璃
+  put(d, winSide([-0.32, 0.04], [-0.58, 0.58], 0.004, 0.018), M.glass);       // 车窗玻璃
   put(d, winSide([0.00, 0.04], [0.54, 0.58], 0.015, 0.035), M.paint);         // A 柱窗框（跟着前挡风躺下）
-  put(d, winSide([-0.32, -0.28], [-0.52, -0.48], 0.015, 0.035), M.paint);     // C 柱窗框（跟着溜背后倾）
+  put(d, winSide([-0.32, -0.28], [-0.58, -0.54], 0.015, 0.035), M.paint);     // C 柱窗框（跟着溜背后倾）
   box(d, 0.05, 0.05, 0.54, M.paint, [s * 0.012, -0.006, -0.05]);             // 顶部铰链条
   const decal = put(d, new THREE.PlaneGeometry(0.72, 0.232), M.decal, [s * 0.123, -0.236, -0.06]);
   decal.rotation.order = 'ZYX';
@@ -1039,6 +1039,8 @@ function updateHands(T, weights = {}) {
     hand.thumb.root.rotation.z = hand.side * lerp(30, -12, (1 - curl) * deployed) * DEG;
     hand.thumb.joints[0].rotation.x = lerp(18, 72, curl) * DEG;
     hand.thumb.joints[1].rotation.x = lerp(12, 70, curl) * DEG;
+    // 下垂时腕部旋了 90°（手心贴大腿）；挥手要把它转回来，不然朝着人的是手的侧棱
+    addRot('hand' + hand.side, 0, 0, hand.side * 90, wave);
   }
 }
 for (const s of [1, -1]) {
@@ -1077,8 +1079,11 @@ for (const s of [1, -1]) {
   box(el, .038, .03, .36, M.faceMetal, [s * .12, .193, -.32]);
 
   const hand = part('hand' + s, 'elbow' + s, [
-    [0, { p: [0, 0, -.28] }], [.60, {}],
+    [0, { p: [0, 0, -.28], r: [0, 0, 0] }], [.60, {}],
     [.66, { p: [0, 0, -.66] }],
+    /* 腕部旋 90°：不转的话是解剖学立正姿势（手心朝前、拇指朝外），看着像端着双手。
+       转过来之后手背朝外、手心贴着大腿、拇指朝前，才是自然下垂。 */
+    [.72, { r: [0, 0, -s * 90] }],
   ], { label: s > 0 ? ['收纳机械手', '五指手掌'] : null, anchor: [0, .04, -.15], ex: [0, 0, -1], dist: .2 });
   // 腕部转轴、分层掌甲以及掌心的机械压板。
   cyl(hand, .094, .10, M.mech, [0, 0, -.015], [90, 0, 0], 20);
