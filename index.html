@@ -1215,14 +1215,27 @@ for (const s of [1, -1]) {
     sz > 0 ? 0 : -0.36,
   ]), M.paint);
   // 保险杠展开成有脚尖、脚背和收窄后跟的靴形装甲。
-  robotShape(boot, v => {
+  // lift 把灯座/灯罩/灯芯在变形后仍然一层层错开，否则它们会被压成同一个面而打架。
+  const bootShape = (lift = 0) => v => {
     const heel = clamp01((v.z + .36) / .36);
     v.x *= lerp(.95, .85, heel);           // 车形尾端已收窄，靴跟宽度保持不变
     v.y = -.23 + (v.y + .23) / .46 * lerp(.32, .60, heel);
-    v.z = lerp(-.67, .05, heel);
-  }, .76, .82);
-  // 两侧柔和红脸蛋，随保险杠一起变形，侧视时自然收窄。
-  const blush = put(foot, new THREE.PlaneGeometry(0.40, 0.40), M.rearBlush, [-s * 0.04, 0.025, -0.362], [0, 180, 0]);
+    v.z = lerp(-.67, .05, heel) - lift;
+  };
+  robotShape(boot, bootShape(), .76, .82);
+  /* 尾灯。这块地方原来只有一张柔光红贴片——倒车视角里它是"脸蛋"，配上尾翼支架那两枚
+     椭圆就是一张脸。但当尾灯看它太虚了：没有灯座、没有灯罩、不发光。
+     改成同心圆灯组：深色灯座 + 发红光的灯罩 + 中间一点反光碗。圆尾灯本来就是跑车的
+     经典做法，而且亮起来的圆灯仍然是那张脸的腮红，两件事不冲突。 */
+  const lampY = 0.02, lampZ = -0.35;
+  [
+    cyl(foot, 0.105, 0.045, M.trim, [-s * 0.04, lampY, lampZ], [90, 0, 0], 24),
+    cyl(foot, 0.082, 0.052, M.tail, [-s * 0.04, lampY, lampZ - 0.006], [90, 0, 0], 24),
+    cyl(foot, 0.030, 0.058, M.rim, [-s * 0.04, lampY, lampZ - 0.012], [90, 0, 0], 14),
+  ].forEach((m, i) => robotShape(m, bootShape(0.004 + i * 0.005), .76, .82));
+  glow(foot, GLOW.tail, 0.30, [-s * 0.04, lampY, lampZ - 0.06]);
+  // 柔光贴片留下来当灯的光晕，顺手挪到和灯同心。
+  const blush = put(foot, new THREE.PlaneGeometry(0.40, 0.40), M.rearBlush, [-s * 0.04, lampY, -0.358], [0, 180, 0]);
   blush.castShadow = false;
   blush.receiveShadow = false;
   box(foot, 0.66, 0.10, 0.10, M.trim, [0, -0.18, -0.30]);
