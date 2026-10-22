@@ -938,9 +938,10 @@ for (const s of [1, -1]) {
     [0, { p: [s * 0.60, 1.45, 0.04], r: [0, 0, 0] }],
     [0.12, { r: [0, 0, s * 112] }],
     [0.42, {}],
-    [0.46, { p: [s * 0.60, 1.45, 1.55] }],
-    [0.51, { p: [s * 0.92, 0.12, 1.55], r: [0, 0, s * 22] }],
-    [0.55, { p: [s * 0.92, 0.12, 0.66] }],
+    /* 原来这里是三段：先冲到车头前方 1.5 个单位，再横移下坠，再退回来——一个凭空划出的
+       U 形弯。现在压成两段直线：先沿车顶摆出车外，再顺着导轨直直滑下来。 */
+    [0.48, { p: [s * 0.98, 1.45, 0.34] }],
+    [0.55, { p: [s * 0.92, 0.12, 0.66], r: [0, 0, s * 22] }],
     [0.90, {}],
     [1.00, { p: [s * 0.92, 0.14, 0.72], r: [0, 0, s * 40] }],
   ], { label: s > 0 ? ['鸥翼门', '背翼'] : null, anchor: [s * 0.26, -0.72, 0], ex: [s, 0.2, 0.3] });
@@ -968,6 +969,54 @@ for (const s of [1, -1]) {
   ]), M.paint);
   box(d, 0.02, 0.04, 0.16, M.trim, [s * 0.25, -0.60, -0.30]);
   box(d, 0.18, 0.09, 0.12, M.paint, [s * 0.30, -0.52, 0.50]);
+}
+
+/* —— 车门导轨 ——
+   车门原本是"飞"过去的：两个关键帧之间没有任何东西连着它。这里给每扇门加一根
+   伸缩导轨——外轨是固定在腰线里的 C 形槽，内轨从槽里滑出来，末端的滑块抱住车门
+   铰链。导轨的朝向和内轨的伸出量每帧按车门的实际位置算（见 updateDoorRails），
+   所以无论变形到哪一帧，车门都还挂在轨道上，而不是浮在空中。
+   车形时整根导轨埋在腰线板和座舱实体里，看不见。 */
+const RAIL_UP = new THREE.Vector3(0, 1, 0);
+const RAIL_OUTER = 0.54, RAIL_INNER = 0.56;
+const doorRails = [];
+for (const s of [1, -1]) {
+  const root = new THREE.Vector3(s * 0.68, 0.90, 0.10);
+  const g = new THREE.Group();
+  g.position.copy(root);
+  chest.inner.add(g);
+  const add = (mesh, pos) => {
+    if (pos) mesh.position.set(pos[0], pos[1], pos[2]);
+    mesh.castShadow = true; mesh.receiveShadow = true;
+    g.add(mesh); return mesh;
+  };
+  // 外轨：两条侧板 + 背板，合起来是一道 C 形槽
+  for (const o of [1, -1]) add(new THREE.Mesh(chamferBox(0.026, RAIL_OUTER, 0.034), M.mech), [o * 0.045, RAIL_OUTER / 2, 0]);
+  add(new THREE.Mesh(chamferBox(0.064, RAIL_OUTER, 0.015), M.trim), [0, RAIL_OUTER / 2, -0.026]);
+  // 内轨：长度固定，只是从槽里滑出来（分解视图里跨度变大时才会被拉长）
+  const slide = add(new THREE.Mesh(chamferBox(0.046, 1, 0.046), M.rim));
+  // 滑块：抱住车门铰链的那个夹头
+  const carriage = new THREE.Group();
+  g.add(carriage);
+  for (const m of [new THREE.Mesh(chamferBox(0.10, 0.085, 0.09), M.mech),
+                   new THREE.Mesh(new THREE.CylinderGeometry(0.021, 0.021, 0.17, 12), M.trim)]) {
+    m.castShadow = true; m.receiveShadow = true;
+    carriage.add(m);
+  }
+  carriage.children[1].rotation.z = Math.PI / 2;
+  doorRails.push({ root, g, slide, carriage, door: rig['door' + s] });
+}
+const _rail = new THREE.Vector3();
+function updateDoorRails() {
+  for (const r of doorRails) {
+    _rail.copy(r.door.g.position).sub(r.root);
+    const d = Math.max(0.2, _rail.length());
+    r.g.quaternion.setFromUnitVectors(RAIL_UP, _rail.normalize());
+    const near = Math.max(0, Math.min(d - RAIL_INNER, 0.42));   // 内轨尾端始终留在槽里
+    r.slide.position.y = (near + d) / 2;
+    r.slide.scale.y = d - near;
+    r.carriage.position.y = d;
+  }
 }
 
 /* —— 手臂：横移出侧舱，小臂从上臂里伸出 —— */
@@ -1644,6 +1693,7 @@ function step(dt) {
   updateHands(state.T, state.w);
   ground(state.E * 0.55);
   applyExplode(state.E, state.time);
+  updateDoorRails();
   modelRoot.updateMatrixWorld(true);
   updateWires(state.E);
 
