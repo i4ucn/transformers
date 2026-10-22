@@ -757,17 +757,17 @@ function shaped(fn) {
    盖住它的东西只能再往上堆，于是越修越高、越修越像个外挂的挡泥板。
    现在把轮子缩到 0.40、轮心在车身坐标里下沉 0.08，轮胎顶端落到 0.76，
    比引擎盖线低了 0.084，这块板的上沿就能直接用车身本来的腰线，和车身齐平。
-   开口是圆弧、上沿是斜线，两者之间的料自然前薄后厚，不用额外做渐变。
-   参数都在侧视的 (z, y) 平面里：z0/z1 是前后端，yBack/yFront 是上沿，cz/cy 是轮轴。 */
-function fenderGeo(z0, z1, yBack, yFront, yBottom, cz, cy, rOpen, width) {
+   开口是圆弧、上沿跟着车身走，两者之间的料自然前薄后厚，不用额外做渐变。
+   上沿写成一串折点而不是一条直线：引擎盖在 z=0.90 处转进车鼻、斜率变陡，
+   单一直线过了这个折点就会骑在车身上面，轮拱前方因此支出来一道台阶。
+   参数都在侧视的 (z, y) 平面里：top 是上沿折线（后→前），cz/cy 是轮轴。 */
+function fenderGeo(top, yBottom, cz, cy, rOpen, width) {
   const p = new THREE.Shape();
-  p.moveTo(z0, yBack);
-  p.lineTo(z1, yFront);
-  p.lineTo(z1, yBottom);
-  p.lineTo(cz + rOpen, yBottom);
+  top.forEach(([z, y], i) => (i ? p.lineTo(z, y) : p.moveTo(z, y)));
+  p.lineTo(cz + rOpen, yBottom);   // 前端斜着落到轮拱口，不是一刀切的竖面
   p.absarc(cz, cy, rOpen, 0, Math.PI, false);   // 轮拱开口
   p.lineTo(cz - rOpen, yBottom);
-  p.lineTo(z0, yBottom);
+  p.lineTo(top[0][0], yBottom);
   p.closePath();
   /* 倒角打开：挤出件默认是一圈直角硬边，在这个满是倒角的车身上会显得特别"方"。
      bevel 让轮拱口和板子四周都带一圈小圆角，和 chamferBox 那套是一个语言。
@@ -947,7 +947,7 @@ put(hood, shaped((sx, sy, sz) => (sy < 0
   : [sx * (sz < 0 ? 0.80 : 0.65), sz < 0 ? 0.52 : 0.32, sz < 0 ? 0.90 : 1.26])), M.paint);
 for (const s of [1, -1]) {
   // 前翼子板：上沿就是引擎盖那条线（0.68→0.47），开口半径 0.42 比轮胎 0.40 大一点
-  put(hood, fenderGeo(0.02, 1.08, 0.68, 0.47, 0.04, 0.56, 0.10, 0.44, 0.32), M.paint, [s * 0.86, 0, 0]);
+  put(hood, fenderGeo([[0.02, 0.685], [0.90, 0.515], [1.06, 0.425]], 0.04, 0.56, 0.10, 0.44, 0.32), M.paint, [s * 0.86, 0, 0]);
   box(hood, 0.28, 0.08, 0.03, M.light, [s * 0.47, 0.23, 1.300], [-17.7, 0, 0]); // 大灯
   glow(hood, GLOW.head, 0.42, [s * 0.47, 0.23, 1.36]);
   box(hood, 0.12, 0.012, 0.92, M.stripe, [s * 0.12, 0.617, 0.45], [10.7, 0, 0]);
@@ -1192,7 +1192,7 @@ for (const s of [1, -1]) {
   eyeGlint.scale.set(0.022, 0.034, 0.009);
   box(hip, 0.03, 0.12, 0.28, M.trim, [s * 0.33, 0.63, -0.76]);
   // 后翼子板，同一套做法；放在 robotShape 之前，这样它会跟着大腿一起变形
-  put(hip, fenderGeo(-0.88, 0.06, 0.10, 0.30, -0.26, -0.35, -0.30, 0.44, 0.32), M.paint, [s * 0.45, 0, 0]);
+  put(hip, fenderGeo([[-0.88, 0.10], [0.06, 0.30]], -0.32, -0.35, -0.30, 0.44, 0.32), M.paint, [s * 0.45, 0, 0]);
   for (const mesh of hip.meshes) robotShape(mesh, v => {
     v.x *= lerp(1, 1.055, clamp01(-v.z / 0.9));   // 车形已经收窄了，这里补回去，大腿宽度跟改动前一致
     v.z *= 1.30;
