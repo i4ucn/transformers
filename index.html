@@ -752,6 +752,23 @@ function shaped(fn) {
   };
   return buildTris(chamferTris(0.5, 0.5, 0.5, r(0), r(1), r(2)), deform);
 }
+/* 轮眉：一段圆环扇面，沿轮轴方向挤出成实体。
+   为什么非得是弧形：轮胎顶在 0.62，而引擎盖那条线只有 0.588 —— 一条直线压在一个圆上，
+   中间那段必然露出来，上沿抬多高都只是换个地方露。只有让这块本身是弧形、
+   内半径大于轮胎半径，整个顶部才一次性包住。
+   两端收在 20°/160°，正好没入引擎盖侧面里，所以看到的是一道从车身鼓出来的弧，
+   不是一片架在轮子上的挡泥板。 */
+function archGeo(rIn, rOut, width, a0, a1, seg = 28) {
+  const shape = new THREE.Shape();
+  shape.absarc(0, 0, rOut, a0, a1, false);
+  shape.absarc(0, 0, rIn, a1, a0, true);
+  shape.closePath();
+  const g = new THREE.ExtrudeGeometry(shape, { depth: width, bevelEnabled: false, curveSegments: seg, steps: 1 });
+  g.translate(0, 0, -width / 2);
+  g.rotateY(Math.PI / 2);        // 侧视平面转到车身侧面，挤出方向变成轮轴方向
+  return g;
+}
+
 function wheel(rec) {
   cyl(rec, 0.44, 0.30, M.tire, [0, 0, 0], [0, 0, 90], 32);
   cyl(rec, 0.285, 0.32, M.rim, [0, 0, 0], [0, 0, 90], 24);
@@ -916,15 +933,14 @@ put(hood, shaped((sx, sy, sz) => (sy < 0
   ? [sx * (sz < 0 ? 0.80 : 0.76), 0.05, sz < 0 ? 0.90 : 1.34]
   : [sx * (sz < 0 ? 0.80 : 0.65), sz < 0 ? 0.52 : 0.32, sz < 0 ? 0.90 : 1.26])), M.paint);
 for (const s of [1, -1]) {
-  /* 前轮拱。车身侧面原来是一整面平板，轮子只能整个挂在外面，看着像沙滩车。
-     这里让车身在轮子上方向外张出去一块，轮子上半截就埋进这块板里（两个都是实体，
-     埋进去的部分自然看不见），露出来的是轮拱下沿以下那一段 —— 轮子就"进"车身了。
-     翼子板比轮胎外沿再宽 0.02，所以俯视时是车身包着轮子，不是轮子顶着车身。 */
+  /* 前轮：车身侧面在轮子这一段整体加宽（下面这块），轮胎内侧埋进车身、外侧露在轮拱下沿以下；
+     再加一道弧形轮眉盖住轮胎顶部——加宽的那块上沿是直线，盖不住圆顶，这两件事各管一半。 */
   put(hood, shaped((sx, sy, sz) => [
     s * ((sx * s > 0) ? (sz > 0 ? 0.98 : 1.03) : 0.72),
     sy > 0 ? (sz > 0 ? 0.49 : 0.69) : (sz > 0 ? 0.28 : 0.34),   // 上沿接引擎盖，下沿是轮拱线
     sz > 0 ? 1.10 : 0.00,
   ]), M.paint);
+  put(hood, archGeo(0.46, 0.56, 0.34, 20 * DEG, 160 * DEG), M.paint, [s * 0.86, 0.18, 0.56]);
   box(hood, 0.28, 0.08, 0.03, M.light, [s * 0.47, 0.23, 1.300], [-17.7, 0, 0]); // 大灯
   glow(hood, GLOW.head, 0.42, [s * 0.47, 0.23, 1.36]);
   box(hood, 0.12, 0.012, 0.92, M.stripe, [s * 0.12, 0.617, 0.45], [10.7, 0, 0]);
@@ -1168,12 +1184,13 @@ for (const s of [1, -1]) {
   const eyeGlint = put(hip, new THREE.SphereGeometry(1, 16, 12), M.light, [-s * 0.18 - 0.028, 0.535, -0.825]);
   eyeGlint.scale.set(0.022, 0.034, 0.009);
   box(hip, 0.03, 0.12, 0.28, M.trim, [s * 0.33, 0.63, -0.76]);
-  // 后轮拱，和前面同一套做法；放在 robotShape 之前，这样它会跟着大腿一起变形
+  // 后轮同一套做法；放在 robotShape 之前，这样它们会跟着大腿一起变形
   put(hip, shaped((sx, sy, sz) => [
     s * ((sx * s > 0) ? (sz > 0 ? 0.62 : 0.58) : 0.33),
     sy > 0 ? (sz > 0 ? 0.28 : 0.12) : (sz > 0 ? -0.06 : -0.10),  // 上沿接尾部甲板，下沿是轮拱线
     sz > 0 ? 0.08 : -0.90,
   ]), M.paint);
+  put(hip, archGeo(0.46, 0.56, 0.34, 20 * DEG, 160 * DEG), M.paint, [s * 0.45, -0.22, -0.35]);
   for (const mesh of hip.meshes) robotShape(mesh, v => {
     v.x *= lerp(1, 1.055, clamp01(-v.z / 0.9));   // 车形已经收窄了，这里补回去，大腿宽度跟改动前一致
     v.z *= 1.30;
