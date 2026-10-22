@@ -526,19 +526,23 @@ function glow(rec, mat, size, pos) {
   return s;
 }
 
-// 贴在车尾表面的红晕，圆心泛红、边缘渐隐；普通透明混合保留红色。
-const blushTex = canvasTexture(128, 128, g => {
-  const grd = g.createRadialGradient(64, 64, 0, 64, 64, 64);
-  grd.addColorStop(0, 'rgba(255,255,255,.90)');
-  grd.addColorStop(0.30, 'rgba(255,255,255,.78)');
-  grd.addColorStop(0.60, 'rgba(255,255,255,.40)');
-  grd.addColorStop(0.82, 'rgba(255,255,255,.12)');
-  grd.addColorStop(1, 'rgba(255,255,255,0)');
-  g.fillStyle = grd; g.fillRect(0, 0, 128, 128);
+/* 尾灯外面那层光。前两版都在灯外面加"一圈东西"——先是深色灯座，后是车身色圆唇——
+   不管什么颜色，只要是一个圈，边就是硬的。这一版干脆不要圈：让灯的光自己往外漫。
+   渐变的峰值压在灯罩边缘上，往里让灯罩透出来、往外化进车漆。于是灯罩那条唯一的硬边
+   被埋在红光里，整块远看就是一团化开的红——既是亮着的灯，也是腮红。 */
+const lampHaloTex = canvasTexture(192, 192, g => {
+  const grd = g.createRadialGradient(96, 96, 0, 96, 96, 96);
+  grd.addColorStop(0.00, 'rgba(255,96,64,0)');     // 中心留空，灯罩自己发亮
+  grd.addColorStop(0.30, 'rgba(255,88,58,.13)');
+  grd.addColorStop(0.44, 'rgba(255,74,50,.46)');   // 峰值压在灯罩边缘，把那条边吃掉
+  grd.addColorStop(0.58, 'rgba(255,68,46,.36)');
+  grd.addColorStop(0.74, 'rgba(255,74,52,.19)');
+  grd.addColorStop(0.90, 'rgba(255,92,68,.06)');   // 化在车漆上的红
+  grd.addColorStop(1.00, 'rgba(255,92,68,0)');
+  g.fillStyle = grd; g.fillRect(0, 0, 192, 192);
 });
-M.rearBlush = new THREE.MeshBasicMaterial({
-  map: blushTex, color: new THREE.Color(0xff3547).convertSRGBToLinear(),
-  transparent: true, depthWrite: false, toneMapped: false,
+M.lampHalo = new THREE.MeshBasicMaterial({
+  map: lampHaloTex, transparent: true, depthWrite: false, toneMapped: false,
   polygonOffset: true, polygonOffsetFactor: -1, polygonOffsetUnits: -1,
 });
 
@@ -1223,21 +1227,21 @@ for (const s of [1, -1]) {
     v.z = lerp(-.67, .05, heel) - lift;
   };
   robotShape(boot, bootShape(), .76, .82);
-  /* 尾灯。这块地方原来只有一张柔光红贴片——倒车视角里它是"脸蛋"，配上尾翼支架那两枚
-     椭圆就是一张脸。但当尾灯看它太虚了：没有灯座、没有灯罩、不发光。
-     改成同心圆灯组：深色灯座 + 发红光的灯罩 + 中间一点反光碗。圆尾灯本来就是跑车的
-     经典做法，而且亮起来的圆灯仍然是那张脸的腮红，两件事不冲突。 */
-  const lampY = 0.02, lampZ = -0.35;
+  /* 尾灯。倒车视角里这两盏同时是那张脸的腮红（上面两枚椭圆是眼睛），所以外面不能有圈。
+     实体只留两层灯罩：外层一片、里层再凸出来一点点，靠这道台阶和清漆的高光给出厚度，
+     两层同色，所以不会多出一条对比边。剩下的全交给上面那张渐变。 */
+  const lampY = -0.04, lampZ = -0.35;
+  const lampX = -s * 0.04;
   [
-    cyl(foot, 0.105, 0.045, M.trim, [-s * 0.04, lampY, lampZ], [90, 0, 0], 24),
-    cyl(foot, 0.082, 0.052, M.tail, [-s * 0.04, lampY, lampZ - 0.006], [90, 0, 0], 24),
-    cyl(foot, 0.030, 0.058, M.rim, [-s * 0.04, lampY, lampZ - 0.012], [90, 0, 0], 14),
+    cyl(foot, 0.075, 0.050, M.tail, [lampX, lampY, lampZ + 0.005], [90, 0, 0], 28),
+    cyl(foot, 0.042, 0.056, M.tail, [lampX, lampY, lampZ + 0.002], [90, 0, 0], 20),
   ].forEach((m, i) => robotShape(m, bootShape(0.004 + i * 0.005), .76, .82));
-  glow(foot, GLOW.tail, 0.30, [-s * 0.04, lampY, lampZ - 0.06]);
-  // 柔光贴片留下来当灯的光晕，顺手挪到和灯同心。
-  const blush = put(foot, new THREE.PlaneGeometry(0.40, 0.40), M.rearBlush, [-s * 0.04, lampY, -0.358], [0, 180, 0]);
-  blush.castShadow = false;
-  blush.receiveShadow = false;
+  glow(foot, GLOW.tail, 0.26, [lampX, lampY, lampZ - 0.07]);
+  /* 红光贴片盖在灯罩外面（z 比灯罩更靠外），才能把灯罩的边吃掉；
+     也必须比保险杠外表面 -0.36 更靠外，否则整片会被车漆挡住。 */
+  const halo = put(foot, new THREE.PlaneGeometry(0.34, 0.34), M.lampHalo, [lampX, lampY, -0.384], [0, 180, 0]);
+  halo.castShadow = false;
+  halo.receiveShadow = false;
   box(foot, 0.66, 0.10, 0.10, M.trim, [0, -0.18, -0.30]);
   cyl(foot, 0.055, 0.06, M.rim, [s * 0.22, -0.15, -0.37], [90, 0, 0], 12);
   box(foot, 0.62, 0.22, 0.24, M.mech, [0, -0.10, 0.12]);
