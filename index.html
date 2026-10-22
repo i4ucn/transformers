@@ -430,8 +430,10 @@ const M = {
             normalMap: TEX.flake, normalScale: V2(0.55),
             clearcoat: 0.14, clearcoatRoughness: 0.8, envMapIntensity: 0.4 }),      // 橡胶：侧壁有层淡淡的油光
   cabin:  phy(0x171d27, { metalness: 0.5, roughness: 0.07, clearcoat: 1, clearcoatRoughness: 0.03, envMapIntensity: 1.5 }),
-  glass:  phy(0x9fd2f0, { metalness: 0, roughness: 0.02, transparent: true, opacity: 0.4,
-            clearcoat: 1, clearcoatRoughness: 0.02, envMapIntensity: 2.1 }),
+  /* 车窗：原来底色太浅、环境反射拉到 2.1，侧窗整块把灯箱照抄下来，看上去跟车漆一个颜色。
+     压暗底色、提高不透明度让身后的深色座舱透出来，反射只留一道高光。 */
+  glass:  phy(0x16242f, { metalness: 0, roughness: 0.05, transparent: true, opacity: 0.62,
+            clearcoat: 1, clearcoatRoughness: 0.04, envMapIntensity: 0.85 }),
   stripe: phy(0x121419, { metalness: 0.55, roughness: 0.2, clearcoat: 1, clearcoatRoughness: 0.06, envMapIntensity: 1.2 }),
   rearEye: phy(0x101218, { metalness: 0.15, roughness: 0.3, clearcoat: 1, clearcoatRoughness: 0.12 }),
   light:  phy(0xfff6e4, { metalness: 0, roughness: 0.07, clearcoat: 1, clearcoatRoughness: 0.03,
@@ -789,11 +791,13 @@ for (const s of [1, -1]) {
   spanS(chest, s, 0.37, 0.80, 0.33, 0.95, -0.74, -0.42, M.paint);    // 后柱
 }
 put(chest, shaped((sx, sy, sz) => (sy < 0
-  ? [sx * 0.75, 0.95, sz < 0 ? -0.70 : 0.70]
-  : [sx * 0.60, 1.45, sz < 0 ? -0.30 : 0.28])), M.cabin);           // 车舱：车顶后缘前移，后挡风从 27° 拉到 38°，变成溜背
-span(chest, -0.58, 0.58, 1.45, 1.49, -0.28, 0.26, M.paint);           // 车顶 → 胸甲
-for (const s of [1, -1]) box(chest, 0.12, 0.012, 0.54, M.stripe, [s * 0.12, 1.496, -0.01]);
-box(chest, 1.24, 0.64, 0.02, M.glass, [0, 1.208, 0.509], [-41.1, 0, 0]); // 前挡风玻璃 → 上胸
+  ? [sx * 0.80, 0.95, sz < 0 ? -0.70 : 0.70]
+  /* 座舱：底边外移到 0.80 和车门刃口、前后柱同宽；车顶前后缘都向内收，
+     前挡风从 50° 躺到 40°、后挡风从 27° 拉到 38°。侧看是一条顺下来的折线。 */
+  : [sx * 0.60, 1.45, sz < 0 ? -0.30 : 0.10])), M.cabin);
+span(chest, -0.58, 0.58, 1.45, 1.49, -0.28, 0.08, M.paint);           // 车顶 → 胸甲
+for (const s of [1, -1]) box(chest, 0.12, 0.012, 0.34, M.stripe, [s * 0.12, 1.496, -0.10]);
+box(chest, 1.24, 0.765, 0.02, M.glass, [0, 1.20, 0.40], [-50.2, 0, 0]); // 前挡风玻璃 → 上胸
 box(chest, 1.18, 0.61, 0.02, M.glass, [0, 1.20, -0.50], [38.0, 0, 0]);  // 后窗 → 下腹
 for (const mesh of chest.meshes) robotShape(mesh, v => {
   const height = clamp01((v.z + 0.74) / 1.48);
@@ -815,7 +819,7 @@ for (const s of [1, -1]) {
 }
 
 /* —— 车顶 LiGuo 徽章 → 胸章：最后原地转半圈，两种形态里都是正的 —— */
-const emblem = part('emblem', 'chest', [[0, { p: [0, 1.49, -0.08], r: [0, 0, 0] }], [0.55, {}], [0.64, { p: [0, 1.63, 0.05] }], [0.88, {}], [0.96, { r: [0, 180, 0] }]],
+const emblem = part('emblem', 'chest', [[0, { p: [0, 1.49, -0.10], r: [0, 0, 0] }], [0.55, {}], [0.64, { p: [0, 1.63, 0.05] }], [0.88, {}], [0.96, { r: [0, 180, 0] }]],
   { label: ['车顶徽章', '胸章'], ex: [0, 1, 0], dist: 0.3, anchor: [0, 0.05, 0] });
 cyl(emblem, 0.20, 0.03, M.rim, [0, 0.015, 0], null, 40);
 put(emblem, new THREE.CircleGeometry(0.175, 48), M.badge, [0, 0.0315, 0], [-90, 0, 0]);
@@ -943,24 +947,27 @@ for (const s of [1, -1]) {
   /* 侧窗贴着驾驶舱侧面：同一倾角，上窄下宽，前后边顺着挡风玻璃和后窗的斜线 */
   const winSide = (zTop, zBot, off0, off1) => shaped((sx, sy, sz) => {
     const off = (sx > 0) === (s > 0) ? off1 : off0;          // 离驾驶舱侧面的距离（沿外法线）
-    const bx = sy > 0 ? 0 : s * 0.162, by = sy > 0 ? 0 : -0.50;
-    return [bx + s * 0.951 * off, by + 0.308 * off, sy > 0 ? zTop[sz > 0 ? 1 : 0] : zBot[sz > 0 ? 1 : 0]];
+    const bx = sy > 0 ? 0 : s * 0.20, by = sy > 0 ? 0 : -0.50;
+    return [bx + s * 0.9285 * off, by + 0.3714 * off, sy > 0 ? zTop[sz > 0 ? 1 : 0] : zBot[sz > 0 ? 1 : 0]];
   });
-  put(d, winSide([-0.46, 0.22], [-0.58, 0.58], 0.004, 0.018), M.glass);       // 车窗玻璃
-  put(d, winSide([0.18, 0.22], [0.54, 0.58], 0.015, 0.035), M.paint);         // A 柱窗框
+  put(d, winSide([-0.46, 0.04], [-0.58, 0.58], 0.004, 0.018), M.glass);       // 车窗玻璃
+  put(d, winSide([0.00, 0.04], [0.54, 0.58], 0.015, 0.035), M.paint);         // A 柱窗框（跟着前挡风躺下）
   put(d, winSide([-0.32, -0.28], [-0.52, -0.48], 0.015, 0.035), M.paint);     // C 柱窗框（跟着溜背后倾）
   box(d, 0.05, 0.05, 0.54, M.paint, [s * 0.012, -0.006, -0.05]);             // 顶部铰链条
-  const decal = put(d, new THREE.PlaneGeometry(0.72, 0.232), M.decal, [s * 0.100, -0.236, -0.06]);
+  const decal = put(d, new THREE.PlaneGeometry(0.72, 0.232), M.decal, [s * 0.123, -0.236, -0.06]);
   decal.rotation.order = 'ZYX';
-  decal.rotation.set(0, s * 90 * DEG, s * 17.95 * DEG);
+  decal.rotation.set(0, s * 90 * DEG, s * 21.8 * DEG);
   decal.castShadow = false;
+  /* 车门外板做成下厚上薄的楔子：门槛处最宽 0.90，到腰线收成几乎为零的刃口，
+     正好和座舱底边同宽。于是车侧从门槛一路到车顶是一条不断的折面，
+     腰线上那圈 0.18 的平台没有了 —— 座舱不再是扣上去的，是这条折面自己抬起来的一段。 */
   put(d, shaped((sx, sy, sz) => [
-    s * ((sx * s > 0) ? (sy > 0 ? 0.33 : 0.255) : 0.20),   // 外板下缘内收 0.075，侧面有了收腰
-    sy > 0 ? -0.49 : -1.01,
+    s * ((sx * s > 0) ? (sy > 0 ? 0.215 : 0.30) : 0.20),
+    sy > 0 ? -0.50 : -1.01,
     sz > 0 ? 0.61 : -0.61,
   ]), M.paint);
-  box(d, 0.02, 0.04, 0.16, M.trim, [s * 0.335, -0.60, -0.30]);
-  box(d, 0.18, 0.09, 0.12, M.paint, [s * 0.40, -0.52, 0.50]);
+  box(d, 0.02, 0.04, 0.16, M.trim, [s * 0.25, -0.60, -0.30]);
+  box(d, 0.18, 0.09, 0.12, M.paint, [s * 0.30, -0.52, 0.50]);
 }
 
 /* —— 手臂：横移出侧舱，小臂从上臂里伸出 —— */
