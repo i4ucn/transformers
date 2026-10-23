@@ -1046,7 +1046,25 @@ for (const s of [1, -1]) {
   box(hood, 0.22, 0.02, 0.22, M.trim, [s * 0.42, 0.645, 0.28], [10.7, 0, 0]);  // 引擎盖散热口
   cyl(hood, 0.07, 0.22, M.mech, [s * 0.50, 0.04, 0.02], [0, 0, 90], 14);         // 铰链
 }
-box(hood, 0.70, 0.12, 0.03, M.trim, [0, 0.14, 1.325]);
+/* —— 车头进气格栅 ——
+   车鼻正面是一块往后仰的斜面：下沿在 (y 0.05, z 1.34)、上沿在 (y 0.32, z 1.26)，
+   倾角 atan(0.08/0.27) ≈ 16.5°。格栅的每一片都必须贴着这个斜面，否则侧面看过去
+   就是一排浮在车头前方的横条。所以这里先把整副格栅画在一个以格栅中心为原点的
+   局部坐标系里（x 横向、y 沿斜面向上、z 沿法线向外），最后由 put 统一转到斜面上，
+   省得每根横条各算一遍 y/z。
+   层次：哑光黑背板当"洞" → 拉丝钢横条立在洞口前、靠投影给出深度 → 中央徽标。
+   背板用 M.tire 而不是 M.trim：进气口要读成一个黑洞，用最哑、最暗的那个材质，
+   横条的 M.mech 才有东西可衬。
+   宽度收在 0.64（半宽 0.32），和大灯内缘 0.33 之间留 0.01 的缝，正面看是
+   「格栅居中、两盏灯分列两侧」一条连续的车头横向图形。 */
+const GRILLE_POS = [0, 0.165, 1.306], GRILLE_ROT = [-16.5, 0, 0];
+put(hood, chamferBox(0.64, 0.21, 0.04), M.tire, GRILLE_POS, GRILLE_ROT);
+const slats = [];
+for (let k = -2; k <= 2; k++) slats.push(chamferBox(0.62, 0.016, 0.040).translate(0, k * 0.040, 0.018));
+put(hood, mergeGeos(slats), M.mech, GRILLE_POS, GRILLE_ROT);
+// 中央徽标：沿用车顶徽章那一套，铬底盘 + 贴图圆面
+put(hood, new THREE.CylinderGeometry(0.085, 0.085, 0.022, 40).rotateX(Math.PI / 2).translate(0, 0, 0.034), M.rim, GRILLE_POS, GRILLE_ROT);
+put(hood, new THREE.CircleGeometry(0.075, 48).translate(0, 0, 0.046), M.badge, GRILLE_POS, GRILLE_ROT);
 box(hood, 1.56, 0.04, 0.18, M.trim, [0, 0.05, 1.25]);
 for (const s of [1, -1]) {
   const w = part('wheelF' + s, 'hood', [
@@ -1371,7 +1389,10 @@ for (const s of [1, -1]) {
   halo.castShadow = false;
   halo.receiveShadow = false;
   box(foot, 0.66, 0.10, 0.10, M.trim, [0, -0.18, -0.30]);
-  cyl(foot, 0.055, 0.06, M.rim, [s * 0.22, -0.15, -0.37], [90, 0, 0], 12);
+  /* 这里原来左右各有一枚 M.rim 的小圆柱，位置像排气口，但它是个带盖的实心圆柱、
+     只凸出保险杠 0.02，车形态下就是车漆上一枚孤零零的铬钉帽；变形之后保险杠翻成脚，
+     它又变成半埋在脚背里的一块亮斑 —— 两种形态都不表达任何东西，所以删掉。
+     真要补排气，位置应该在下面那条黑色扩散器里（深色凹口），而不是贴在黄色车漆上。 */
   box(foot, 0.62, 0.22, 0.24, M.mech, [0, -0.10, 0.12]);
 
   // 收起时鞋底与脚背藏在保险杠内，展开后围住脚尖并形成落地面。
