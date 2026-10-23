@@ -782,12 +782,84 @@ function fenderGeo(top, yBottom, cz, cy, rOpen, width) {
   return g;
 }
 
-function wheel(rec) {
-  cyl(rec, 0.40, 0.28, M.tire, [0, 0, 0], [0, 0, 90], 32);
-  cyl(rec, 0.26, 0.30, M.rim, [0, 0, 0], [0, 0, 90], 24);
-  for (let k = 0; k < 3; k++) box(rec, 0.31, 0.06, 0.44, M.trim, [0, 0, 0], [k * 60, 0, 0]);
-  cyl(rec, 0.16, 0.32, M.trim, [0, 0, 0], [0, 0, 90], 28);                       // 轮毂盖
-  for (const sx of [1, -1]) put(rec, new THREE.CircleGeometry(0.15, 40), M.badge, [sx * 0.161, 0, 0], [0, sx * 90, 0]);
+/* 把几条几何体拼成一条，省掉成倍的 draw call。
+   涡轮叶片 10 片、轮缘螺栓 8 颗，一个轮子就是 18 次调用，四个轮子 72 次 —— 合并之后是 8 次。
+   都是 non-indexed、都带 position/normal/uv，所以直接首尾相接即可。 */
+function mergeGeos(list) {
+  const flat = list.map(g => (g.index ? g.toNonIndexed() : g));
+  const out = new THREE.BufferGeometry();
+  for (const key of ['position', 'normal', 'uv']) {
+    const size = key === 'uv' ? 2 : 3;
+    let total = 0;
+    for (const g of flat) total += g.attributes.position.count * size;
+    const arr = new Float32Array(total);
+    let o = 0;
+    for (const g of flat) {
+      const a = g.attributes[key];
+      if (a) arr.set(a.array.subarray(0, g.attributes.position.count * size), o);
+      o += g.attributes.position.count * size;
+    }
+    out.setAttribute(key, new THREE.BufferAttribute(arr, size));
+  }
+  return out;
+}
+
+/* 圆环体（带孔的实心环），轴沿 x —— 轮胎、胎侧筋、轮辋都是这个形状。
+   原来轮胎是一整根实心圆柱，两个端面各是一张 0.40 的黑圆盘，等于先用黑纸把轮子糊死，
+   再往纸上贴几根辐条 —— 不管怎么加细节都是平的。改成真正的环以后轮子有了"里面"，
+   叶片、底盘、轮毂才能一层层往里排，侧面看过去是有深度的。
+   倒角走 bevel，顺手给轮胎一道圆润的胎肩、给轮辋一圈机加工的亮边。 */
+function ringGeo(rOuter, rInner, width, bevel, seg = 48) {
+  const shape = new THREE.Shape();
+  shape.absarc(0, 0, rOuter, 0, Math.PI * 2, false);
+  const hole = new THREE.Path();
+  hole.absarc(0, 0, rInner, 0, Math.PI * 2, true);
+  shape.holes.push(hole);
+  const g = new THREE.ExtrudeGeometry(shape, {
+    depth: width - bevel * 2, curveSegments: seg, steps: 1,
+    bevelEnabled: true, bevelThickness: bevel, bevelSize: bevel, bevelSegments: 3,
+  });
+  g.translate(0, 0, -(width - bevel * 2) / 2);
+  g.rotateY(Math.PI / 2);        // 挤出方向 z 转到 x，环就立在车身侧面上
+  return g;
+}
+
+/* 轮子。这个零件的标签写着"前轮 → 背部涡轮"：变形之后它就是背上那两台涡轮。
+   所以轮面不做常规的几片辐条，直接做成涡轮进气口 —— 10 片带桨距的叶片绕着中心桨毂排开，
+   车形态下是一只高级的空力轮毂，机器人形态下它本来就是标签说的那台涡轮，不用另外加件。
+   叶片的桨距按左右轮取反，两边是镜像的，不是同一个方向平移过去。
+   从外往里：胎 → 胎侧筋 → 轮辋亮边(带螺栓) → 叶片 → 底盘 → 桨毂(青环 + 标) */
+function wheel(rec, s) {
+  put(rec, ringGeo(0.400, 0.300, 0.275, 0.024), M.tire);
+  put(rec, ringGeo(0.352, 0.318, 0.292, 0.008, 40), M.trim);    // 胎侧那道筋，侧面给一条高光
+  put(rec, ringGeo(0.316, 0.252, 0.298, 0.016), M.rim);         // 抛光轮辋，比胎侧再探出一点
+
+  // 轮辋螺栓：深色小圆柱顶在亮面上，是"锻造轮毂"最省事也最有效的那个暗示
+  const bolts = [];
+  for (let k = 0; k < 8; k++) {
+    bolts.push(new THREE.CylinderGeometry(0.015, 0.015, 0.313, 8)
+      .rotateZ(Math.PI / 2).translate(0, 0.284, 0).rotateX(k * Math.PI / 4));
+  }
+  put(rec, mergeGeos(bolts), M.trim);
+
+  /* 涡轮叶片。先绕自身的径向轴拧出 42° 桨距，再推到半径 0.19 上，最后绕轮轴转到各自的角位。
+     10 片的弧距是 0.119，每片的切向投影 0.110 —— 留了 0.009 的缝，所以叶片彼此不穿插，
+     又密到从正侧面看几乎连成一圈，正是涡轮该有的样子。 */
+  const blades = [];
+  for (let k = 0; k < 10; k++) {
+    blades.push(chamferBox(0.026, 0.170, 0.125)
+      .rotateY(s * 42 * DEG).translate(0, 0.190, 0).rotateX(k * Math.PI / 5));
+  }
+  put(rec, mergeGeos(blades), M.mech);
+
+  cyl(rec, 0.262, 0.034, M.trim, [0, 0, 0], [0, 0, 90], 40);     // 底盘：把叶片后面封死，不透光
+  cyl(rec, 0.120, 0.168, M.trim, [0, 0, 0], [0, 0, 90], 28);     // 桨毂本体
+  cyl(rec, 0.104, 0.180, M.mech, [0, 0, 0], [0, 0, 90], 28);     // 比本体再探出 0.006，车出一道台阶
+  // 台阶那道槽里嵌一圈青光，和面罩、眼睛同一个色系 —— 全车唯一一处发光点到为止
+  put(rec, mergeGeos([1, -1].map(sx =>
+    new THREE.TorusGeometry(0.112, 0.010, 8, 36).rotateY(Math.PI / 2).translate(sx * 0.084, 0, 0))), M.optic);
+  put(rec, mergeGeos([1, -1].map(sx =>
+    new THREE.CircleGeometry(0.096, 40).rotateY(sx * Math.PI / 2).translate(sx * 0.0905, 0, 0))), M.badge);
 }
 
 /* ============================================================
@@ -965,7 +1037,7 @@ for (const s of [1, -1]) {
     [0.42, { p: [s * 0.46, 0.90, 0.56] }],
   ], { label: s > 0 ? ['前轮', '背部涡轮'] : null });
   w.g.rotation.order = 'ZYX';   // 先绕轮轴自转，再侧翻成涡轮
-  wheel(w);
+  wheel(w, s);
 }
 
 /* —— 鸥翼门：先让路收到背后，最后张开成背翼 —— */
@@ -1186,10 +1258,26 @@ for (const s of [1, -1]) {
   box(hip, 0.12, 0.012, 0.92, M.stripe, [-s * 0.29, 0.207, -0.45], [-11.9, 0, 0]);
   // 抬高尾翼，让两枚纵向椭圆支撑在后视图中成为眼睛。
   box(hip, 0.74, 0.035, 0.26, M.trim, [0, 0.66, -0.76]);
-  const rearEye = put(hip, new THREE.SphereGeometry(1, 32, 24), M.rearEye, [-s * 0.18, 0.47, -0.76]);
-  rearEye.scale.set(0.105, 0.185, 0.075);
-  const eyeGlint = put(hip, new THREE.SphereGeometry(1, 16, 12), M.light, [-s * 0.18 - 0.028, 0.535, -0.825]);
-  eyeGlint.scale.set(0.022, 0.034, 0.009);
+  /* 尾翼支撑柱。原来那两枚椭圆是悬空的：它们的底边在 y=0.285，而这个 z 上的尾部甲板
+     只有 y=0.130 —— 中间 0.155 什么都没有，尾翼等于浮在空中。
+     这里补上真正的支撑：一根从甲板长到尾翼底面的立柱，下宽上窄、前缘后掠，
+     底面跟着甲板的下坠角一起斜下去（0.158→0.094），两端各扎进甲板和尾翼里一点，
+     所以哪个角度都看不到接缝。眼睛改成嵌在柱子后脸上的灯组，不再是独立悬浮的球。
+     立柱用车漆而不是和尾翼一样的黑：黑柱子上嵌一只黑眼睛，两者明度几乎相同，
+     眼睛会糊成一块看不出来 —— 车漆色的柱子才衬得出深色灯体，后视图里仍然是
+     「黑尾翼当眉毛、黄脸、两只眼睛」。顺带这样也更像从甲板长出来的一体化支架。 */
+  const eyeX = -s * 0.18;
+  put(hip, shaped((sx, sy, sz) => [
+    eyeX + sx * (sy > 0 ? 0.070 : 0.098),
+    sy > 0 ? 0.648 : (sz > 0 ? 0.158 : 0.094),
+    sz > 0 ? (sy > 0 ? -0.645 : -0.565) : (sy > 0 ? -0.768 : -0.845),
+  ]), M.paint);
+  /* 眼睛收小到原来的七成左右，并往柱子里埋进去大半，只露 0.027 的弧面 —— 像嵌进壳体的
+     透镜，而不是粘上去的两颗珠子。高光点按同样比例缩放，位置仍在球面上。 */
+  const rearEye = put(hip, new THREE.SphereGeometry(1, 32, 24), M.rearEye, [eyeX, 0.47, -0.76]);
+  rearEye.scale.set(0.076, 0.128, 0.060);
+  const eyeGlint = put(hip, new THREE.SphereGeometry(1, 16, 12), M.light, [eyeX - 0.020, 0.515, -0.812]);
+  eyeGlint.scale.set(0.018, 0.027, 0.008);
   box(hip, 0.03, 0.12, 0.28, M.trim, [s * 0.33, 0.63, -0.76]);
   // 后翼子板，同一套做法；放在 robotShape 之前，这样它会跟着大腿一起变形
   put(hip, fenderGeo([[-0.88, 0.10], [0.06, 0.30]], -0.32, -0.35, -0.30, 0.44, 0.32), M.paint, [s * 0.45, 0, 0]);
@@ -1211,7 +1299,7 @@ for (const s of [1, -1]) {
     [0.42, { p: [s * 0.58, -0.34, -0.80], r: [90, 0, 0] }],
     [0.64, {}], [0.80, { p: [s * 0.35, -0.48, -0.98] }],
   ], { label: s > 0 ? ['后轮', '腿侧轮'] : null, ex: [s, 0, 0] });
-  wheel(wr);
+  wheel(wr, s);
 
   const knee = part('knee' + s, 'hip' + s, [
     [0, { p: [0, 0, -0.90], r: [0, 0, 0] }], [0.72, {}],
