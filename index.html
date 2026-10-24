@@ -500,6 +500,8 @@ const doorTex = canvasTexture(1024, 330, g => {
   g.fillStyle = 'rgba(255, 255, 255, 0.92)';
   g.fill(new Path2D(LOGO.word), 'evenodd');
 });
+M.fog = phy(0xffb545, { metalness: 0, roughness: 0.12, clearcoat: 1, clearcoatRoughness: 0.05,
+          emissive: 0xff8c10, emissiveIntensity: 1.35, envMapIntensity: 1.2 });   // 保险杠下角的圆雾灯
 M.badge = new THREE.MeshPhysicalMaterial({ map: badgeTex, roughness: 0.28, metalness: 0.35, clearcoat: 1, clearcoatRoughness: 0.06, envMapIntensity: 1.2 });
 M.decal = new THREE.MeshPhysicalMaterial({ map: doorTex, transparent: true, roughness: 0.3, metalness: 0, clearcoat: 1, clearcoatRoughness: 0.08, depthWrite: false, polygonOffset: true, polygonOffsetFactor: -2 });
 
@@ -1039,32 +1041,78 @@ put(hood, shaped((sx, sy, sz) => (sy < 0
 for (const s of [1, -1]) {
   // 前翼子板：上沿就是引擎盖那条线（0.68→0.47），开口半径 0.42 比轮胎 0.40 大一点
   put(hood, fenderGeo([[0.02, 0.685], [0.90, 0.515], [1.06, 0.425]], 0.04, 0.56, 0.10, 0.44, 0.32), M.paint, [s * 0.86, 0, 0]);
-  box(hood, 0.28, 0.08, 0.03, M.light, [s * 0.47, 0.23, 1.300], [-17.7, 0, 0]); // 大灯
-  glow(hood, GLOW.head, 0.42, [s * 0.47, 0.23, 1.36]);
   box(hood, 0.12, 0.012, 0.92, M.stripe, [s * 0.12, 0.617, 0.45], [10.7, 0, 0]);
   box(hood, 0.12, 0.012, 0.42, M.stripe, [s * 0.12, 0.43, 1.08], [26.6, 0, 0]);
   box(hood, 0.22, 0.02, 0.22, M.trim, [s * 0.42, 0.645, 0.28], [10.7, 0, 0]);  // 引擎盖散热口
   cyl(hood, 0.07, 0.22, M.mech, [s * 0.50, 0.04, 0.02], [0, 0, 90], 14);         // 铰链
 }
-/* —— 车头进气格栅 ——
-   车鼻正面是一块往后仰的斜面：下沿在 (y 0.05, z 1.34)、上沿在 (y 0.32, z 1.26)，
-   倾角 atan(0.08/0.27) ≈ 16.5°。格栅的每一片都必须贴着这个斜面，否则侧面看过去
-   就是一排浮在车头前方的横条。所以这里先把整副格栅画在一个以格栅中心为原点的
-   局部坐标系里（x 横向、y 沿斜面向上、z 沿法线向外），最后由 put 统一转到斜面上，
-   省得每根横条各算一遍 y/z。
-   层次：哑光黑背板当"洞" → 拉丝钢横条立在洞口前、靠投影给出深度 → 中央徽标。
-   背板用 M.tire 而不是 M.trim：进气口要读成一个黑洞，用最哑、最暗的那个材质，
-   横条的 M.mech 才有东西可衬。
-   宽度收在 0.64（半宽 0.32），和大灯内缘 0.33 之间留 0.01 的缝，正面看是
-   「格栅居中、两盏灯分列两侧」一条连续的车头横向图形。 */
-const GRILLE_POS = [0, 0.165, 1.306], GRILLE_ROT = [-16.5, 0, 0];
-put(hood, chamferBox(0.64, 0.21, 0.04), M.tire, GRILLE_POS, GRILLE_ROT);
-const slats = [];
-for (let k = -2; k <= 2; k++) slats.push(chamferBox(0.62, 0.016, 0.040).translate(0, k * 0.040, 0.018));
-put(hood, mergeGeos(slats), M.mech, GRILLE_POS, GRILLE_ROT);
-// 中央徽标：沿用车顶徽章那一套，铬底盘 + 贴图圆面
-put(hood, new THREE.CylinderGeometry(0.085, 0.085, 0.022, 40).rotateX(Math.PI / 2).translate(0, 0, 0.034), M.rim, GRILLE_POS, GRILLE_ROT);
-put(hood, new THREE.CircleGeometry(0.075, 48).translate(0, 0, 0.046), M.badge, GRILLE_POS, GRILLE_ROT);
+/* —— 车头：双层进气口（参照大黄蜂 Camaro） ——
+   参考图里真正"凶"的不是上面那条缝，是保险杠上那个大开口。所以这里分两层：
+   上层是一道窄横槽，两端直接接大灯，整条黑带横贯车头；
+   下层是居中的大开口，面积是上层的两倍多；两层之间留一条车漆把它们分开。
+   下层按参考图收窄成居中开口、不走满宽，空出来的两个下角各嵌一枚圆雾灯。
+
+   车鼻正面是往后仰 16.5° 的梯形斜面（下沿 y0.05/z1.34、上沿 y0.32/z1.26，
+   半宽 0.760→0.650）。两层都画在各自的局部斜面坐标系里（x 横向、y 沿斜面向上、
+   z 沿法线向外），由 put 统一转过去；背板和横条都按所在高度收宽，跟着车鼻的收口走。 */
+const NOSE_ROT = [-16.5, 0, 0];
+const noseZ = y => 1.34 - 0.08 * (y - 0.05) / 0.27;
+
+/* 上层：窄横槽 + 两端的大灯 */
+const UP_POS = [0, 0.258, noseZ(0.258)], UP_H = 0.034;
+const UP_W = v => lerp(0.657, 0.630, (v + UP_H) / (UP_H * 2));
+put(hood, shaped((sx, sy, sz) => [sx * UP_W(sy * UP_H), sy * UP_H, sz * 0.020]), M.tire, UP_POS, NOSE_ROT);
+const upSlats = [];
+for (let k = -1; k <= 1; k++) {
+  const v = k * 0.017;
+  upSlats.push(chamferBox((UP_W(v) - 0.018) * 2, 0.011, 0.036).translate(0, v, 0.016));
+}
+put(hood, mergeGeos(upSlats), M.mech, UP_POS, NOSE_ROT);
+/* 大灯：参考图里大灯不是和格栅缝一样高的一条亮边，它比那道缝高出不少，
+   上下都探到车漆上，是两只有体积的灯。所以这里不把灯塞进上槽的高度里，
+   而是另给它一个更高的范围（y 0.211..0.299，上槽只有 0.225..0.291）。
+   两层：深色灯座 + 嵌在里面的灯罩，四周留一圈黑边 —— 只给一片白的话，
+   在黑格栅上读出来的是一条亮饰条，不是一只灯。
+   外端高、往车中间收，顺着翼子板那条线后掠，和参考图一个走向。 */
+for (const s of [1, -1]) {
+  put(hood, shaped((sx, sy, sz) => [
+    s * (sx > 0 ? 0.650 : 0.325),
+    -0.003 + sy * (sx > 0 ? 0.046 : 0.030),
+    0.026 + sz * 0.014,
+  ]), M.trim, UP_POS, NOSE_ROT);
+  put(hood, shaped((sx, sy, sz) => [
+    s * (sx > 0 ? 0.633 : 0.345),
+    -0.003 + sy * (sx > 0 ? 0.033 : 0.020),
+    0.038 + sz * 0.010,
+  ]), M.light, UP_POS, NOSE_ROT);
+  // 眩光收到 0.26：原来 0.34 把灯糊成一片白，看不出形状
+  glow(hood, GLOW.head, 0.26, [s * 0.50, 0.268, 1.335]);
+}
+// 中央徽标压在上槽正中，略微盖过槽的上下边 —— 参考图里车标也是这样坐在格栅上的
+put(hood, new THREE.CylinderGeometry(0.068, 0.068, 0.020, 40).rotateX(Math.PI / 2).translate(0, 0, 0.028), M.rim, UP_POS, NOSE_ROT);
+put(hood, new THREE.CircleGeometry(0.060, 48).translate(0, 0, 0.039), M.badge, UP_POS, NOSE_ROT);
+
+/* 下层：保险杠上的大开口，整个车头最凶的那块 */
+const LO_POS = [0, 0.124, noseZ(0.124)], LO_H = 0.055;
+const LO_W = v => lerp(0.520, 0.468, (v + LO_H) / (LO_H * 2));
+put(hood, shaped((sx, sy, sz) => [sx * LO_W(sy * LO_H), sy * LO_H, sz * 0.024]), M.tire, LO_POS, NOSE_ROT);
+const loSlats = [];
+for (let k = -2; k <= 2; k++) {
+  const v = k * 0.021;
+  loSlats.push(chamferBox((LO_W(v) - 0.020) * 2, 0.014, 0.044).translate(0, v, 0.020));
+}
+put(hood, mergeGeos(loSlats), M.mech, LO_POS, NOSE_ROT);
+
+/* 圆雾灯：嵌在下开口外侧那两个角上。圆柱轴要贴着斜面的法线，
+   所以绕 x 转 90-16.5 = 73.5°，不是 90°，否则灯是斜着扎进车漆里的。 */
+for (const s of [1, -1]) {
+  /* 原来灯心在 y=0.112、半径 0.074，下缘落到 0.038 —— 比车鼻底沿 0.050 还低，
+     于是整枚灯挂在车头下边缘外面。抬到 0.135 之后 y 跨 0.065..0.205，收在车鼻里。
+     眩光从 0.22 收到 0.11：暖白的 GLOW.head 盖在琥珀灯罩上，开大了就只剩一团白。 */
+  cyl(hood, 0.070, 0.042, M.tire, [s * 0.605, 0.135, 1.3148], [73.5, 0, 0], 24);
+  cyl(hood, 0.044, 0.048, M.fog, [s * 0.605, 0.1384, 1.3263], [73.5, 0, 0], 22);
+  glow(hood, GLOW.head, 0.11, [s * 0.605, 0.142, 1.345]);
+}
 box(hood, 1.56, 0.04, 0.18, M.trim, [0, 0.05, 1.25]);
 for (const s of [1, -1]) {
   const w = part('wheelF' + s, 'hood', [
