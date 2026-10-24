@@ -1085,10 +1085,17 @@ const hood = part('hood', 'chest', [[0, { p: [0, 0.26, 0.74] }], [0.28, {}], [0.
    把两块并成一条放样体之后，顶面改用一条曲线：仍然是原来那两条直线，
    只在 z∈[0.72,1.08] 之间用 smoothstep 把拐角圆掉 —— 全程与原折线最大只差 0.006，
    外形不变，但斜率是连续的，那道棱就没有了。俯视的收口和底面的抬升同样圆化。 */
+/* 顶面曲线。上一版只是把两条直线的拐角圆掉，棱是没了，但车鼻那一段仍然是 29.1° 的
+   陡坡，圆角只是把陡坡的起点抹顺而已 —— 看过去还是"上面一片缓、下面一片陡"。
+   这一版干脆不要分段：首尾两端定死（z=0 高 0.69、z=1.26 高 0.32，车鼻正面因此不变，
+   格栅完全不用动），中间用三次 Hermite 连起来，两端斜率给 9.6° 和 21.8°。
+   于是斜度沿车长单调地从 10° 涨到 22°，最陡处从 29.1° 降到 21.8°，全程没有突变。 */
 const HOOD_TOP = z => {
-  const a = 0.69 - 0.189 * z;                 // 引擎盖段
-  const b = 0.52 - 0.556 * (z - 0.90);        // 车鼻段
-  return lerp(a, b, smoothstep01(clamp01((z - 0.72) / 0.36)));
+  const u = clamp01(z / 1.26), u2 = u * u, u3 = u2 * u;
+  return (2 * u3 - 3 * u2 + 1) * 0.69          // 起点高度
+       + (u3 - 2 * u2 + u) * (1.26 * -0.17)    // 起点斜率 9.6°
+       + (-2 * u3 + 3 * u2) * 0.32             // 终点高度
+       + (u3 - u2) * (1.26 * -0.40);           // 终点斜率 21.8°
 };
 const HOOD_ZBOT = z => z + 0.08 * clamp01((z - 0.90) / 0.36);   // 车鼻正面后仰，底沿比顶沿靠前
 put(hood, loftBody(Array.from({ length: 21 }, (_, i) => {
@@ -1102,7 +1109,10 @@ put(hood, loftBody(Array.from({ length: 21 }, (_, i) => {
 })), M.paint);
 for (const s of [1, -1]) {
   // 前翼子板：上沿就是引擎盖那条线（0.68→0.47），开口半径 0.42 比轮胎 0.40 大一点
-  put(hood, fenderGeo([[0.02, 0.685], [0.90, 0.515], [1.06, 0.425]], 0.04, 0.56, 0.10, 0.44, 0.32), M.paint, [s * 0.86, 0, 0]);
+  /* 顶线按 HOOD_TOP 重新采样（各低 0.005，和原来翼子板略低于车身肩线的关系一致）。
+     车身顶面在 z=0.90 处降了 0.066，顶线不跟着下来的话翼子板会高出车身一道脊。
+     点数从 3 个加到 4 个：顶面现在是曲的，三段折线接不住。 */
+  put(hood, fenderGeo([[0.02, 0.682], [0.45, 0.587], [0.78, 0.490], [1.06, 0.392]], 0.04, 0.56, 0.10, 0.44, 0.32), M.paint, [s * 0.86, 0, 0]);
   /* 赛车条纹：原来也是两段——引擎盖上一条斜 10.7°、车鼻上一条斜 26.6°，
      在 z=0.90 处对接，于是条纹本身在接缝上折了一下、还错了位。
      改成按 HOOD_TOP 同一条曲线逐点采样铺过去，顶面怎么弯条纹就怎么弯，不再有断点。 */
@@ -1988,19 +1998,6 @@ function step(dt) {
   updateLabels(state.E, W, H);
   updateUI();
 }
-window.__cam = (az, el, dist, ty) => {
-  const t = new THREE.Vector3(0, ty === undefined ? camY : ty, 0);
-  controls.target.copy(t);
-  camera.position.set(
-    t.x + dist * Math.cos(el * DEG) * Math.sin(az * DEG),
-    t.y + dist * Math.sin(el * DEG),
-    t.z + dist * Math.cos(el * DEG) * Math.cos(az * DEG));
-  camera.lookAt(t); controls.update(); userMoved = true;
-  renderer.render(scene, camera);
-  return [az, el, dist];
-};
-window.__jump = (T) => { state.T = T; state.target = T; state.pose = null; state.pendingPose = null;
-  for (let i = 0; i < 120; i++) step(1/60); return document.getElementById('pctText').textContent; };
 requestAnimationFrame(tick);
 })();
 </script>
