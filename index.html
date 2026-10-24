@@ -170,6 +170,7 @@ if (!THREE.OrbitControls) {
    ============================================================ */
 const DEG = Math.PI / 180;
 const clamp01 = v => (v < 0 ? 0 : v > 1 ? 1 : v);
+const smoothstep01 = t => t * t * (3 - 2 * t);
 const lerp = (a, b, t) => a + (b - a) * t;
 const easeIO = t => (t < 0.5 ? 4 * t * t * t : 1 - Math.pow(-2 * t + 2, 3) / 2);
 const reduceMotion = window.matchMedia && matchMedia('(prefers-reduced-motion: reduce)').matches;
@@ -719,6 +720,52 @@ function buildTris(tris, deform) {
   g.computeVertexNormals();
   return g;
 }
+/* 沿 z 放样的车身段。每个截面给出：中心 x、上/下沿的 z、上/下沿半宽、上/下沿高度。
+   截面被倒成八边形（四条长棱各切一刀），八个面各自成一条带：
+   同一条带内沿 z 共用顶点，条与条之间不共用 —— 于是法线沿车身长度方向是连续的
+   （顶面怎么弯都不会出现一道棱），而四条长棱依然是硬的，折面感不丢。
+   这正是 chamferBox 做不到的事：两块 chamferBox 拼在一起，各自的倒角背靠背，
+   接缝处必然是一道 V 形凹槽，再怎么对齐也抹不掉。 */
+function loftBody(sections, c = CHAMFER) {
+  const pos = [], uv = [], idx = [];
+  const ringOf = s => [
+    [s.xc - s.hwTop + c, s.yTop, s.zTop], [s.xc + s.hwTop - c, s.yTop, s.zTop],
+    [s.xc + s.hwTop, s.yTop - c, s.zTop], [s.xc + s.hwBot, s.yBot + c, s.zBot],
+    [s.xc + s.hwBot - c, s.yBot, s.zBot], [s.xc - s.hwBot + c, s.yBot, s.zBot],
+    [s.xc - s.hwBot, s.yBot + c, s.zBot], [s.xc - s.hwTop, s.yTop - c, s.zTop],
+  ];
+  const rings = sections.map(ringOf);
+  const n = rings.length;
+  // 侧面用 (z, y) 投影，其余用 (x, z)，和 buildTris 的"按主轴投影"保持一致的贴图密度
+  const SIDE = [false, false, true, false, false, false, true, false];
+  const push = (p, side) => {
+    pos.push(p[0], p[1], p[2]);
+    uv.push(side ? p[2] : p[0], side ? p[1] : p[2]);
+    return pos.length / 3 - 1;
+  };
+  for (let f = 0; f < 8; f++) {
+    const a = f, b = (f + 1) % 8, col = [];
+    for (let i = 0; i < n; i++) col.push([push(rings[i][a], SIDE[f]), push(rings[i][b], SIDE[f])]);
+    for (let i = 0; i < n - 1; i++) {
+      const [p0, p1] = col[i], [q0, q1] = col[i + 1];
+      idx.push(p0, q0, q1, p0, q1, p1);
+    }
+  }
+  const cap = (i, flip) => {
+    const v = rings[i].map(p => push(p, false));
+    for (let k = 1; k < 7; k++) {
+      if (flip) idx.push(v[0], v[k + 1], v[k]); else idx.push(v[0], v[k], v[k + 1]);
+    }
+  };
+  cap(0, false); cap(n - 1, true);
+  const g = new THREE.BufferGeometry();
+  g.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3));
+  g.setAttribute('uv', new THREE.Float32BufferAttribute(uv, 2));
+  g.setIndex(idx);
+  g.computeVertexNormals();
+  return g;
+}
+
 function chamferBox(w, h, d) {
   const a = w / 2, b = h / 2, c = d / 2;
   return buildTris(chamferTris(a, b, c,
@@ -1033,16 +1080,36 @@ for (const z of [-.445, -.39, -.335]) cyl(head, .126, .025, M.trim, [0, -.04, z]
 /* —— 引擎盖 + 车鼻 + 前轮：向后翻 180° 成为背包 —— */
 const hood = part('hood', 'chest', [[0, { p: [0, 0.26, 0.74] }], [0.28, {}], [0.42, { r: [180, 0, 0] }]],
   { label: ['引擎盖', '背包'], anchor: [0, 0.6, 0.5], ex: [0, -0.2, 1] });
-put(hood, shaped((sx, sy, sz) => [sx * 0.80, sy < 0 ? 0 : (sz < 0 ? 0.69 : 0.52), sz < 0 ? 0 : 0.90]), M.paint);
-/* 车鼻：比原来低 0.12、长 0.08，俯视从 0.80 收到 0.65 —— 楔形越明显越像跑车 */
-put(hood, shaped((sx, sy, sz) => (sy < 0
-  ? [sx * (sz < 0 ? 0.80 : 0.76), 0.05, sz < 0 ? 0.90 : 1.34]
-  : [sx * (sz < 0 ? 0.80 : 0.65), sz < 0 ? 0.52 : 0.32, sz < 0 ? 0.90 : 1.26])), M.paint);
+/* 引擎盖 + 车鼻：原来是两块 chamferBox 在 z=0.90 处对接。两段顶面的斜率差 18.4°
+   （引擎盖 10.7°、车鼻 29.1°），加上两块各自的倒角背靠背，接缝处就是一道横贯车头的硬棱。
+   把两块并成一条放样体之后，顶面改用一条曲线：仍然是原来那两条直线，
+   只在 z∈[0.72,1.08] 之间用 smoothstep 把拐角圆掉 —— 全程与原折线最大只差 0.006，
+   外形不变，但斜率是连续的，那道棱就没有了。俯视的收口和底面的抬升同样圆化。 */
+const HOOD_TOP = z => {
+  const a = 0.69 - 0.189 * z;                 // 引擎盖段
+  const b = 0.52 - 0.556 * (z - 0.90);        // 车鼻段
+  return lerp(a, b, smoothstep01(clamp01((z - 0.72) / 0.36)));
+};
+const HOOD_ZBOT = z => z + 0.08 * clamp01((z - 0.90) / 0.36);   // 车鼻正面后仰，底沿比顶沿靠前
+put(hood, loftBody(Array.from({ length: 21 }, (_, i) => {
+  const z = (i / 20) * 1.26;
+  return {
+    xc: 0, zTop: z, zBot: HOOD_ZBOT(z),
+    hwTop: 0.80 - 0.15 * smoothstep01(clamp01((z - 0.86) / 0.40)),
+    hwBot: 0.80 - 0.04 * smoothstep01(clamp01((z - 0.86) / 0.48)),
+    yTop: HOOD_TOP(z), yBot: 0.05 * smoothstep01(clamp01((z - 0.90) / 0.44)),
+  };
+})), M.paint);
 for (const s of [1, -1]) {
   // 前翼子板：上沿就是引擎盖那条线（0.68→0.47），开口半径 0.42 比轮胎 0.40 大一点
   put(hood, fenderGeo([[0.02, 0.685], [0.90, 0.515], [1.06, 0.425]], 0.04, 0.56, 0.10, 0.44, 0.32), M.paint, [s * 0.86, 0, 0]);
-  box(hood, 0.12, 0.012, 0.92, M.stripe, [s * 0.12, 0.617, 0.45], [10.7, 0, 0]);
-  box(hood, 0.12, 0.012, 0.42, M.stripe, [s * 0.12, 0.43, 1.08], [26.6, 0, 0]);
+  /* 赛车条纹：原来也是两段——引擎盖上一条斜 10.7°、车鼻上一条斜 26.6°，
+     在 z=0.90 处对接，于是条纹本身在接缝上折了一下、还错了位。
+     改成按 HOOD_TOP 同一条曲线逐点采样铺过去，顶面怎么弯条纹就怎么弯，不再有断点。 */
+  put(hood, loftBody(Array.from({ length: 25 }, (_, i) => {
+    const z = lerp(-0.01, 1.235, i / 24), y = HOOD_TOP(z);
+    return { xc: s * 0.12, zTop: z, zBot: z, hwTop: 0.06, hwBot: 0.06, yTop: y + 0.010, yBot: y - 0.030 };
+  }), 0.004), M.stripe);
   box(hood, 0.22, 0.02, 0.22, M.trim, [s * 0.42, 0.645, 0.28], [10.7, 0, 0]);  // 引擎盖散热口
   cyl(hood, 0.07, 0.22, M.mech, [s * 0.50, 0.04, 0.02], [0, 0, 90], 14);         // 铰链
 }
@@ -1921,6 +1988,19 @@ function step(dt) {
   updateLabels(state.E, W, H);
   updateUI();
 }
+window.__cam = (az, el, dist, ty) => {
+  const t = new THREE.Vector3(0, ty === undefined ? camY : ty, 0);
+  controls.target.copy(t);
+  camera.position.set(
+    t.x + dist * Math.cos(el * DEG) * Math.sin(az * DEG),
+    t.y + dist * Math.sin(el * DEG),
+    t.z + dist * Math.cos(el * DEG) * Math.cos(az * DEG));
+  camera.lookAt(t); controls.update(); userMoved = true;
+  renderer.render(scene, camera);
+  return [az, el, dist];
+};
+window.__jump = (T) => { state.T = T; state.target = T; state.pose = null; state.pendingPose = null;
+  for (let i = 0; i < 120; i++) step(1/60); return document.getElementById('pctText').textContent; };
 requestAnimationFrame(tick);
 })();
 </script>
